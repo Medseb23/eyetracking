@@ -1,34 +1,37 @@
-
 <!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Gaze Brush Calibrated</title>
+<title>Gaze Brush Mouth</title>
+
+<!-- WebGazer para mirada -->
 <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
+
+<!-- MediaPipe FaceMesh (detección boca) -->
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+
 <style>
-  html, body { margin:0; padding:0; height:100%; overflow:hidden; background:#101114; color:#fff; }
+  html, body { margin:0; padding:0; height:100%; overflow:hidden; background:#111; }
   #wrap { position:relative; width:100%; height:100vh; }
-  #canvas { position:absolute; inset:0; width:100%; height:100%; background:#101114; }
-  #cursor { position:absolute; width:20px; height:20px; border-radius:50%; pointer-events:none;
-            border:2px solid rgba(255,255,255,.9); transform:translate(-50%,-50%); }
+  #canvas { position:absolute; inset:0; width:100%; height:100%; background:#111; }
+  #cursor { position:absolute; width:16px; height:16px; border-radius:50%; pointer-events:none;
+            border:2px solid rgba(255,255,255,.85); transform:translate(-50%,-50%); }
   #hud { position:absolute; top:10px; left:10px; right:10px; display:flex; gap:8px; flex-wrap:wrap;
-         background:rgba(0,0,0,.45); padding:8px 10px; border-radius:10px; align-items:center; }
+         background:rgba(0,0,0,.55); color:#fff; padding:8px 10px; border-radius:10px;
+         font:12px/1.3 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; }
   .btn { appearance:none; border:0; padding:6px 10px; border-radius:10px; cursor:pointer;
-         background:#22272e; color:#fff; font-weight:600; }
+         background:#222; color:#fff; font-weight:600; }
   .btn.primary { background:#00e676; color:#111; }
   .btn.warn { background:#ff5252; }
-  .sp { margin-left:auto; font:12px/1.2 monospace; opacity:.9; }
-  #dbg { position:absolute; bottom:10px; left:10px; font:12px/1.3 monospace; opacity:.9; }
-  #webgazerVideoContainer { display:none !important; }
-  #landmarks { position:absolute; bottom:10px; right:10px; width:260px; height:200px; background:#0006; display:none; }
-  #calibDot { position:absolute; width:18px; height:18px; border-radius:50%; background:#ffcc00; border:2px solid #222; display:none;
-              box-shadow:0 0 0 6px rgba(255,204,0,.25); transform:translate(-50%,-50%); }
-  #calibMsg { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
-              background:#0009; padding:12px 16px; border-radius:12px; display:none; }
+  #stat { margin-left:auto; font-family:monospace; }
+  #dbg { position:absolute; bottom:10px; left:10px; color:#fff; font:12px monospace; }
+  #webgazerVideoContainer { display:none !important; } /* oculta preview de WebGazer */
+  video#inputVideo { display:none; } /* video de MediaPipe oculto */
+  canvas#landmarks { position:absolute; top:10px; right:10px; width:260px; height:200px;
+                     background:#0008; display:none; }
 </style>
 </head>
 <body>
@@ -42,64 +45,64 @@
     <button id="clear" class="btn warn">🧹 Limpiar</button>
     <button id="savePng" class="btn">🖼️ PNG</button>
     <button id="saveCsv" class="btn">📄 CSV</button>
-    <button id="calGaze" class="btn">🎯 Calibrar mirada</button>
-    <button id="calMouth" class="btn">👄 Calibrar boca</button>
-    <span class="sp" id="stat">—</span>
+    <span id="stat">—</span>
   </div>
 
   <div id="dbg">mirada: x=– y=– | MAR=– | umbral=– | dibujando: no</div>
+  <video id="inputVideo" playsinline></video>
   <canvas id="landmarks"></canvas>
-  <div id="calibDot"></div>
-  <div id="calibMsg"></div>
 </div>
 
 <script>
-(function(){
-  const cfg = window.GAZE_CFG || {brush: 8, alpha: .45, debug: false};
+(async function(){
+  // Config inyectada desde Streamlit
+  const cfg = window.GAZE_BRUSH_CONFIG || {brush: 6, alpha: .4, mouthThr: .28, debug: false};
+
   const canvas = document.getElementById('canvas');
   const ctx = canvas.getContext('2d');
   const cursor = document.getElementById('cursor');
   const stat = document.getElementById('stat');
   const dbg = document.getElementById('dbg');
+  const inputVideo = document.getElementById('inputVideo');
   const lmCanvas = document.getElementById('landmarks');
   const lmCtx = lmCanvas.getContext('2d');
   lmCanvas.style.display = cfg.debug ? 'block' : 'none';
-  const dot = document.getElementById('calibDot');
-  const msg = document.getElementById('calibMsg');
 
   const startBtn = document.getElementById('start');
-  const stopBtn = document.getElementById('stop');
+  const stopBtn  = document.getElementById('stop');
   const clearBtn = document.getElementById('clear');
-  const savePng = document.getElementById('savePng');
-  const saveCsv = document.getElementById('saveCsv');
-  const calGaze = document.getElementById('calGaze');
-  const calMouth= document.getElementById('calMouth');
+  const savePng  = document.getElementById('savePng');
+  const saveCsv  = document.getElementById('saveCsv');
 
   let W=0,H=0,dpr=1;
-  let running=false, drawing=false;
-  let brush = cfg.brush;
+  let running=false;
   let alpha = cfg.alpha;
-  let smoothed=null, last=null;
-  let points=[];
-  let mouthThr = null;
-  let marDbg = 0;
-
-  // Gaze affine calibration (2x2 + translation)
-  let A = [1,0,0,1]; // scale/rotation
-  let b = [0,0];     // translation
+  let brush = cfg.brush;
+  let mouthThr = cfg.mouthThr;   // umbral MAR (puedes cambiarlo desde la UI de Streamlit)
+  let smoothed = null;
+  let last = null;
+  let drawing = false; // se activa cuando MAR > umbral
+  const pts = [];      // {t,x,y,mar,drawing}
 
   function resize(){
     dpr = Math.min(window.devicePixelRatio || 1, 2);
-    W = canvas.clientWidth; H = canvas.clientHeight;
-    canvas.width = Math.floor(W*dpr); canvas.height=Math.floor(H*dpr);
+    W = canvas.clientWidth;
+    H = canvas.clientHeight;
+    canvas.width = Math.floor(W * dpr);
+    canvas.height= Math.floor(H * dpr);
     ctx.setTransform(dpr,0,0,dpr,0,0);
   }
-  window.addEventListener('resize', resize); resize();
+  window.addEventListener('resize', resize);
+  resize();
 
-  // WebGazer
+  // ====== WebGazer: Mirada ======
   window.saveDataAcrossSessions = true;
-  webgazer.setRegression('ridge').setTracker('TFFacemesh').begin()
-    .showVideoPreview(false).showPredictionPoints(false).showFaceFeedbackBox(false);
+  webgazer.setRegression('ridge')
+          .setTracker('TFFacemesh')
+          .begin()
+          .showVideoPreview(false)
+          .showPredictionPoints(false)
+          .showFaceFeedbackBox(false);
 
   let gaze = {x:null,y:null};
   webgazer.setGazeListener((data)=>{
@@ -107,206 +110,140 @@
     gaze.x = data.x; gaze.y = data.y;
   });
 
-  // MediaPipe FaceMesh (MAR)
-  const video = document.createElement('video'); // oculto
+  // ====== MediaPipe FaceMesh: MAR (Mouth Aspect Ratio) ======
   const faceMesh = new FaceMesh.FaceMesh({
-    locateFile: (f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
   });
-  faceMesh.setOptions({maxNumFaces:1, refineLandmarks:true, minDetectionConfidence:.5, minTrackingConfidence:.5});
+  faceMesh.setOptions({
+    maxNumFaces: 1,
+    refineLandmarks: true,
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5
+  });
+
   function dist(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
-  faceMesh.onResults(res=>{
-    if(!res.multiFaceLandmarks || !res.multiFaceLandmarks.length) return;
-    const lm = res.multiFaceLandmarks[0];
-    const top=lm[13], bottom=lm[14], left=lm[78], right=lm[308];
-    const mar = dist(top,bottom)/Math.max(1e-6, dist(left,right));
-    marDbg = mar;
-    drawing = (mouthThr!==null) ? (mar>mouthThr) : false;
+
+  let mar = 0;
+  faceMesh.onResults(results => {
+    if(!results.multiFaceLandmarks || results.multiFaceLandmarks.length===0) return;
+    const lm = results.multiFaceLandmarks[0];
+    // Landmarks de labios (aprox indices MediaPipe)
+    const top = lm[13];     // labio superior interno
+    const bottom = lm[14];  // labio inferior interno
+    const left = lm[78];    // extremo izquierdo boca
+    const right = lm[308];  // extremo derecho boca
+    mar = dist(top,bottom) / Math.max(1e-6, dist(left,right));
+    drawing = mar > mouthThr;
 
     if(cfg.debug){
       lmCtx.clearRect(0,0,lmCanvas.width,lmCanvas.height);
-      lmCtx.fillStyle="#0f0"; lmCtx.strokeStyle="#0f0";
-      const w=lmCanvas.width,h=lmCanvas.height;
-      function P(p){ return [p.x*w,p.y*h]; }
-      const pts=[top,bottom,left,right].map(P);
-      for(const p of pts){ lmCtx.beginPath(); lmCtx.arc(p[0],p[1],3,0,Math.PI*2); lmCtx.fill(); }
-      lmCtx.beginPath(); lmCtx.moveTo(...pts[0]); lmCtx.lineTo(...pts[1]); lmCtx.stroke();
-      lmCtx.beginPath(); lmCtx.moveTo(...pts[2]); lmCtx.lineTo(...pts[3]); lmCtx.stroke();
-      lmCtx.fillStyle="#fff"; lmCtx.fillText(`MAR=${mar.toFixed(3)} thr=${mouthThr??'–'}`,8,14);
+      lmCtx.fillStyle = "#0f0"; lmCtx.strokeStyle="#0f0"; lmCtx.lineWidth=1;
+      const w = lmCanvas.width, h = lmCanvas.height;
+      function P(p){ return [p.x*w, p.y*h]; }
+      const ptsD = [top,bottom,left,right].map(P);
+      for(const p of ptsD){ lmCtx.beginPath(); lmCtx.arc(p[0],p[1],3,0,Math.PI*2); lmCtx.fill(); }
+      lmCtx.beginPath(); lmCtx.moveTo(...ptsD[0]); lmCtx.lineTo(...ptsD[1]); lmCtx.stroke();
+      lmCtx.beginPath(); lmCtx.moveTo(...ptsD[2]); lmCtx.lineTo(...ptsD[3]); lmCtx.stroke();
+      lmCtx.fillStyle = "#fff";
+      lmCtx.fillText(`MAR=${mar.toFixed(3)} thr=${mouthThr.toFixed(2)}`, 8, 16);
     }
   });
-  const camera = new Camera.Camera(video, { onFrame: async()=>{ await faceMesh.send({image: video}); }, width:640, height:480 });
+
+  // Cámara para FaceMesh (baja resolución para ahorrar CPU)
+  let frameCount = 0;
+  const camera = new Camera.Camera(inputVideo, {
+    onFrame: async () => {
+      // Procesa ~cada 3 frames (~10–15 fps)
+      frameCount = (frameCount + 1) || 1;
+      if (frameCount % 3 === 0) await faceMesh.send({image: inputVideo});
+    },
+    width: 320, height: 240
+  });
   camera.start();
 
-  // Drawing loop
+  // ====== Bucle de dibujo ======
   function step(){
     if(running && gaze.x!=null && gaze.y!=null){
       if(!smoothed) smoothed = {x:gaze.x, y:gaze.y};
-      smoothed.x = alpha*gaze.x + (1-alpha)*smoothed.x;
-      smoothed.y = alpha*gaze.y + (1-alpha)*smoothed.y;
-      // affine transform
-      const tx = A[0]*smoothed.x + A[1]*smoothed.y + b[0];
-      const ty = A[2]*smoothed.x + A[3]*smoothed.y + b[1];
-      const x = Math.max(0, Math.min(W-1, tx));
-      const y = Math.max(0, Math.min(H-1, ty));
-      // cursor
-      cursor.style.left = x+'px'; cursor.style.top = y+'px';
-      cursor.style.width = (brush*2)+'px'; cursor.style.height = (brush*2)+'px';
-      // draw
+      smoothed.x = alpha * gaze.x + (1-alpha) * smoothed.x;
+      smoothed.y = alpha * gaze.y + (1-alpha) * smoothed.y;
+
+      const x = Math.max(0, Math.min(W-1, smoothed.x));
+      const y = Math.max(0, Math.min(H-1, smoothed.y));
+
+      // cursor (tamaño = 2*brush)
+      cursor.style.left = x + 'px';
+      cursor.style.top  = y + 'px';
+      cursor.style.width = (brush*2) + 'px';
+      cursor.style.height= (brush*2) + 'px';
+
       if(drawing && last){
-        ctx.strokeStyle = 'rgba(0,200,255,.95)';
-        ctx.lineWidth = brush; ctx.lineJoin='round'; ctx.lineCap='round';
-        ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(x,y); ctx.stroke();
+        ctx.strokeStyle = 'rgba(0,200,255,0.95)';
+        ctx.lineWidth = brush;
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(last.x, last.y);
+        ctx.lineTo(x, y);
+        ctx.stroke();
       }
-      last = {x,y};
-      points.push({t:Date.now(), x, y, mar:marDbg, drawing:drawing?1:0});
-      stat.textContent = `pts: ${points.length}`;
+
+      last = {x, y};
+      pts.push({t: Date.now(), x, y, mar: mar || 0, drawing: drawing ? 1 : 0});
+      stat.textContent = `pts: ${pts.length}`;
     }
-    dbg.textContent = `mirada: x=${gaze.x?gaze.x.toFixed(0):'–'} y=${gaze.y?gaze.y.toFixed(0):'–'} | MAR=${marDbg?marDbg.toFixed(3):'–'} | umbral=${mouthThr?mouthThr.toFixed(3):'–'} | dibujando: ${drawing?'sí':'no'}`;
+    dbg.textContent = `mirada: x=${gaze.x?gaze.x.toFixed(0):'–'} y=${gaze.y?gaze.y.toFixed(0):'–'} | MAR=${mar?mar.toFixed(3):'–'} | umbral=${mouthThr?mouthThr.toFixed(2):'–'} | dibujando: ${drawing?'sí':'no'}`;
     requestAnimationFrame(step);
   }
   requestAnimationFrame(step);
 
-  // UI handlers
-  document.getElementById('start').onclick = ()=>{ running=true; };
-  document.getElementById('stop').onclick  = ()=>{ running=false; last=null; };
-  document.getElementById('clear').onclick = ()=>{ running=false; last=null; smoothed=null; points=[]; ctx.clearRect(0,0,canvas.width,canvas.height); };
-  document.getElementById('savePng').onclick = ()=>{ const a=document.createElement('a'); a.download=`gaze_${Date.now()}.png`; a.href=canvas.toDataURL('image/png'); a.click(); };
-  document.getElementById('saveCsv').onclick = ()=>{
-    const header='t_ms,x,y,mar,drawing\n';
-    const body=points.map(p=>`${p.t},${Math.round(p.x)},${Math.round(p.y)},${p.mar.toFixed(4)},${p.drawing}`).join('\n');
-    const blob=new Blob([header+body],{type:'text/csv'}); const url=URL.createObjectURL(blob);
-    const a=document.createElement('a'); a.href=url; a.download=`gaze_${Date.now()}.csv`; a.click(); URL.revokeObjectURL(url);
-  };
+  // ====== UI ======
+  startBtn.addEventListener('click', ()=>{ running = true; });
+  stopBtn.addEventListener('click',  ()=>{ running = false; last=null; });
+  clearBtn.addEventListener('click', ()=>{
+    running=false; last=null; smoothed=null; pts.length=0;
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+  });
 
-  // Canvas dpi sync
+  // Guardar PNG
+  savePng.addEventListener('click', ()=>{
+    const a = document.createElement('a');
+    a.download = `gaze_brush_${Date.now()}.png`;
+    a.href = canvas.toDataURL('image/png');
+    a.click();
+  });
+
+  // Guardar CSV
+  function toCsv(rows){
+    const header = 't_ms,x,y,mar,drawing\n';
+    const body = rows.map(r => `${r.t},${Math.round(r.x)},${Math.round(r.y)},${r.mar.toFixed(4)},${r.drawing}`).join('\n');
+    return header + body;
+  }
+  saveCsv.addEventListener('click', ()=>{
+    const blob = new Blob([toCsv(pts)], {type:'text/csv'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `gaze_points_${Date.now()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  // DPI / resize sync del canvas
   const ro = new ResizeObserver(entries=>{
     for(const e of entries){
-      const r=e.contentRect;
-      canvas.width=Math.floor(r.width*dpr);
-      canvas.height=Math.floor(r.height*dpr);
+      const r = e.contentRect;
+      canvas.width  = Math.floor(r.width * dpr);
+      canvas.height = Math.floor(r.height * dpr);
       ctx.setTransform(dpr,0,0,dpr,0,0);
     }
   });
   ro.observe(canvas);
 
-  // ===== Calibración de mirada (4 esquinas + centro, ajuste afín mínimo cuadrados) =====
-  calGaze.onclick = async ()=>{
-    running=false; last=null; smoothed=null;
-    const targets = [
-      {x: 0.08, y: 0.08},
-      {x: 0.92, y: 0.08},
-      {x: 0.92, y: 0.92},
-      {x: 0.08, y: 0.92},
-      {x: 0.50, y: 0.50}
-    ];
-    const gazeSamples = []; const tgtSamples = [];
-    msg.style.display='block'; msg.textContent='Calibración de mirada: mira el punto y mantén la vista 2 segundos.';
-    for(const t of targets){
-      const px = t.x*W, py = t.y*H;
-      dot.style.left=px+'px'; dot.style.top=py+'px'; dot.style.display='block';
-      await sampleFor(2000, (gx,gy)=>{
-        if(gx!=null&&gy!=null){ gazeSamples.push([gx,gy]); tgtSamples.push([px,py]); }
-      });
-      await wait(400);
-    }
-    dot.style.display='none'; msg.style.display='none';
+  // Atajo de prueba: tecla D como “gatillo” manual (por si la boca falla)
+  window.addEventListener('keydown', e => { if(e.key==='d' || e.key==='D') drawing = true; });
+  window.addEventListener('keyup',   e => { if(e.key==='d' || e.key==='D') drawing = false; });
 
-    // Resolver afín: minimize ||A*[gx gy]^T + b - [tx ty]^T||
-    // Construimos matrices para least squares: M*[a b c d e f]^T ≈ T
-    // donde  tx = a*gx + b*gy + e ; ty = c*gx + d*gy + f
-    const M=[]; const Tx=[]; const Ty=[];
-    for(let i=0;i<gazeSamples.length;i++){
-      const gx=gazeSamples[i][0], gy=gazeSamples[i][1];
-      const tx=tgtSamples[i][0], ty=tgtSamples[i][1];
-      M.push([gx, gy, 0,  0, 1, 0]);
-      M.push([0,  0, gx, gy, 0, 1]);
-      Tx.push(tx); Ty.push(ty);
-    }
-    // Stack Tx/Ty interleaved to Z and solve
-    const Z=[]; for(let i=0;i<Tx.length;i++){ Z.push(Tx[i]); Z.push(Ty[i]); }
-    // Solve via normal equations (M^T M) p = M^T Z
-    const Mt = transpose(M);
-    const MtM = mul(Mt, M);
-    const MtZ = mulVec(Mt, Z);
-    const p = solveGaussian(MtM, MtZ); // [a,b,c,d,e,f]
-    if(p){
-      A=[p[0],p[1],p[2],p[3]]; b=[p[4],p[5]];
-    }
-    alert('Calibración de mirada completada.');
-  };
-
-  // ===== Calibración de boca (cierra y abre para fijar umbral) =====
-  calMouth.onclick = async ()=>{
-    running=false;
-    const closed=[]; const opened=[];
-    // Cerrada
-    msg.textContent='Calibración boca: mantén **CERRADA** por 2 segundos.'; msg.style.display='block';
-    await sampleFor(2000, ()=>{ if(marDbg) closed.push(marDbg); });
-    await wait(400);
-    // Abierta
-    msg.textContent='Ahora **ABIERTA** por 2 segundos.';
-    await sampleFor(2000, ()=>{ if(marDbg) opened.push(marDbg); });
-    msg.style.display='none';
-    const mClosed = median(closed), mOpen = median(opened);
-    mouthThr = (mClosed + mOpen)/2;
-    alert(`Umbral fijado: cerrada≈${mClosed.toFixed(3)} | abierta≈${mOpen.toFixed(3)} → thr=${mouthThr.toFixed(3)}`);
-  };
-
-  // Utils
-  function wait(ms){ return new Promise(r=>setTimeout(r,ms)); }
-  async function sampleFor(ms, cb){
-    const t0=performance.now();
-    return new Promise(res=>{
-      function loop(){
-        const t=performance.now();
-        if(gaze.x!=null&&gaze.y!=null) cb(gaze.x,gaze.y);
-        if(t-t0<ms) requestAnimationFrame(loop); else res();
-      }
-      requestAnimationFrame(loop);
-    });
-  }
-  function transpose(A){
-    const m=A.length, n=A[0].length; const AT=Array.from({length:n},()=>Array(m).fill(0));
-    for(let i=0;i<m;i++) for(let j=0;j<n;j++) AT[j][i]=A[i][j];
-    return AT;
-  }
-  function mul(A,B){
-    const m=A.length, n=A[0].length, p=B[0].length;
-    const C=Array.from({length:m},()=>Array(p).fill(0));
-    for(let i=0;i<m;i++) for(let k=0;k<n;k++) for(let j=0;j<p;j++) C[i][j]+=A[i][k]*B[k][j];
-    return C;
-  }
-  function mulVec(A,v){
-    const m=A.length, n=A[0].length;
-    const r=Array(m).fill(0);
-    for(let i=0;i<m;i++) for(let j=0;j<n;j++) r[i]+=A[i][j]*v[j];
-    return r;
-  }
-  function solveGaussian(A,b){
-    // Simple Gaussian elimination for small systems
-    const n=A.length;
-    // augment
-    const M=A.map((row,i)=>row.concat([b[i]]));
-    for(let i=0;i<n;i++){
-      // pivot
-      let max=i; for(let r=i+1;r<n;r++) if(Math.abs(M[r][i])>Math.abs(M[max][i])) max=r;
-      if(Math.abs(M[max][i])<1e-8) return null;
-      [M[i],M[max]]=[M[max],M[i]];
-      // normalize
-      const piv=M[i][i]; for(let k=i;k<=n;k++) M[i][k]/=piv;
-      // eliminate
-      for(let r=0;r<n;r++) if(r!==i){
-        const f=M[r][i];
-        for(let k=i;k<=n;k++) M[r][k]-=f*M[i][k];
-      }
-    }
-    return M.map(row=>row[n]);
-  }
-  function median(arr){
-    if(!arr.length) return NaN;
-    const a=[...arr].sort((x,y)=>x-y); const mid=Math.floor(a.length/2);
-    return a.length%2 ? a[mid] : (a[mid-1]+a[mid])/2;
-  }
 })();
 </script>
 </body>
