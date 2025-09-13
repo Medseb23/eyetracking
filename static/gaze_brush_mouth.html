@@ -1,22 +1,24 @@
-
 <!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gaze Brush Mouth</title>
-<!-- WebGazer for gaze -->
+
+<!-- WebGazer para mirada -->
 <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
-<!-- MediaPipe FaceMesh (via CDN) -->
+
+<!-- MediaPipe FaceMesh (detección boca) -->
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+
 <style>
   html, body { margin:0; padding:0; height:100%; overflow:hidden; background:#111; }
   #wrap { position:relative; width:100%; height:100vh; }
   #canvas { position:absolute; inset:0; width:100%; height:100%; background:#111; }
   #cursor { position:absolute; width:16px; height:16px; border-radius:50%; pointer-events:none;
-            border:2px solid rgba(255,255,255,.8); transform:translate(-50%,-50%); }
+            border:2px solid rgba(255,255,255,.85); transform:translate(-50%,-50%); }
   #hud { position:absolute; top:10px; left:10px; right:10px; display:flex; gap:8px; flex-wrap:wrap;
          background:rgba(0,0,0,.55); color:#fff; padding:8px 10px; border-radius:10px;
          font:12px/1.3 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; }
@@ -26,15 +28,17 @@
   .btn.warn { background:#ff5252; }
   #stat { margin-left:auto; font-family:monospace; }
   #dbg { position:absolute; bottom:10px; left:10px; color:#fff; font:12px monospace; }
-  #webgazerVideoContainer { display:none !important; } /* ocultar previsualización por defecto */
+  #webgazerVideoContainer { display:none !important; } /* oculta preview de WebGazer */
   video#inputVideo { display:none; } /* video de MediaPipe oculto */
-  canvas#landmarks { position:absolute; top:0; right:0; width:240px; height:180px; background:#0008; display:none; }
+  canvas#landmarks { position:absolute; top:10px; right:10px; width:260px; height:200px;
+                     background:#0008; display:none; }
 </style>
 </head>
 <body>
 <div id="wrap">
   <canvas id="canvas"></canvas>
   <div id="cursor"></div>
+
   <div id="hud">
     <button id="start" class="btn primary">▶️ Iniciar</button>
     <button id="stop" class="btn">⏸️ Pausar</button>
@@ -43,73 +47,70 @@
     <button id="saveCsv" class="btn">📄 CSV</button>
     <span id="stat">—</span>
   </div>
-  <div id="dbg">mirada: x=– y=– | MAR=– | dibujando: no</div>
+
+  <div id="dbg">mirada: x=– y=– | MAR=– | umbral=– | dibujando: no</div>
   <video id="inputVideo" playsinline></video>
   <canvas id="landmarks"></canvas>
 </div>
 
 <script>
 (async function(){
+  // Config inyectada desde Streamlit
   const cfg = window.GAZE_BRUSH_CONFIG || {brush: 6, alpha: .4, mouthThr: .28, debug: false};
+
   const canvas = document.getElementById('canvas');
   const ctx = canvas.getContext('2d');
   const cursor = document.getElementById('cursor');
   const stat = document.getElementById('stat');
   const dbg = document.getElementById('dbg');
-  const startBtn = document.getElementById('start');
-  const stopBtn = document.getElementById('stop');
-  const clearBtn = document.getElementById('clear');
-  const savePng = document.getElementById('savePng');
-  const saveCsv = document.getElementById('saveCsv');
   const inputVideo = document.getElementById('inputVideo');
   const lmCanvas = document.getElementById('landmarks');
   const lmCtx = lmCanvas.getContext('2d');
   lmCanvas.style.display = cfg.debug ? 'block' : 'none';
 
-  let W=0,H=0, running=false;
+  const startBtn = document.getElementById('start');
+  const stopBtn  = document.getElementById('stop');
+  const clearBtn = document.getElementById('clear');
+  const savePng  = document.getElementById('savePng');
+  const saveCsv  = document.getElementById('saveCsv');
+
+  let W=0,H=0,dpr=1;
+  let running=false;
   let alpha = cfg.alpha;
   let brush = cfg.brush;
-  let mouthThr = cfg.mouthThr;
-  let smoothed = null, last = null;
-  let drawing = false; // estado: dibujar cuando boca abierta
-  const pts = []; // {t,x,y,mar,drawing}
+  let mouthThr = cfg.mouthThr;   // umbral MAR (puedes cambiarlo desde la UI de Streamlit)
+  let smoothed = null;
+  let last = null;
+  let drawing = false; // se activa cuando MAR > umbral
+  const pts = [];      // {t,x,y,mar,drawing}
 
   function resize(){
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
     W = canvas.clientWidth;
     H = canvas.clientHeight;
     canvas.width = Math.floor(W * dpr);
-    canvas.height = Math.floor(H * dpr);
+    canvas.height= Math.floor(H * dpr);
     ctx.setTransform(dpr,0,0,dpr,0,0);
-    redraw();
-  }
-  function redraw(){
-    // no limpiar para mantener el trazo al redimensionar
   }
   window.addEventListener('resize', resize);
   resize();
 
-  // WebGazer: mirada
+  // ====== WebGazer: Mirada ======
   window.saveDataAcrossSessions = true;
   webgazer.setRegression('ridge')
-    .setTracker('TFFacemesh')
-    .begin()
-    .showVideoPreview(false)
-    .showPredictionPoints(false)
-    .showFaceFeedbackBox(false);
+          .setTracker('TFFacemesh')
+          .begin()
+          .showVideoPreview(false)
+          .showPredictionPoints(false)
+          .showFaceFeedbackBox(false);
 
-  let gaze = {x: null, y: null};
-  webgazer.setGazeListener((data, elapsedTime)=>{
+  let gaze = {x:null,y:null};
+  webgazer.setGazeListener((data)=>{
     if(!data) return;
-    gaze.x = data.x;
-    gaze.y = data.y;
+    gaze.x = data.x; gaze.y = data.y;
   });
 
-  // MediaPipe FaceMesh: calcular MAR (Mouth Aspect Ratio)
-  // Usamos algunos landmarks de labios (índices del modelo MediaPipe)
-  // superiores (13, 0), inferiores (14, 17), extremos (78, 308) approx
-  function dist(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
-
+  // ====== MediaPipe FaceMesh: MAR (Mouth Aspect Ratio) ======
   const faceMesh = new FaceMesh.FaceMesh({
     locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
   });
@@ -120,15 +121,18 @@
     minTrackingConfidence: 0.5
   });
 
+  function dist(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
+
+  let mar = 0;
   faceMesh.onResults(results => {
     if(!results.multiFaceLandmarks || results.multiFaceLandmarks.length===0) return;
     const lm = results.multiFaceLandmarks[0];
-    // Calcular MAR: apertura vertical / ancho horizontal
-    const top = lm[13];   // upper inner lip
-    const bottom = lm[14];// lower inner lip
-    const left = lm[78];  // mouth left
-    const right = lm[308];// mouth right
-    const mar = dist(top,bottom) / Math.max(1e-6, dist(left,right));
+    // Landmarks de labios (aprox indices MediaPipe)
+    const top = lm[13];     // labio superior interno
+    const bottom = lm[14];  // labio inferior interno
+    const left = lm[78];    // extremo izquierdo boca
+    const right = lm[308];  // extremo derecho boca
+    mar = dist(top,bottom) / Math.max(1e-6, dist(left,right));
     drawing = mar > mouthThr;
 
     if(cfg.debug){
@@ -143,68 +147,76 @@
       lmCtx.fillStyle = "#fff";
       lmCtx.fillText(`MAR=${mar.toFixed(3)} thr=${mouthThr.toFixed(2)}`, 8, 16);
     }
-
-    // HUD
-    dbg.textContent = `mirada: x=${gaze.x?gaze.x.toFixed(0):'–'} y=${gaze.y?gaze.y.toFixed(0):'–'} | MAR=${mar.toFixed(3)} | dibujando: ${drawing?'sí':'no'}`;
   });
 
-  // Iniciar cámara para MediaPipe
+  // Cámara para FaceMesh (baja resolución para ahorrar CPU)
+  let frameCount = 0;
   const camera = new Camera.Camera(inputVideo, {
-    onFrame: async () => { await faceMesh.send({image: inputVideo}); },
-    width: 640, height: 480
+    onFrame: async () => {
+      // Procesa ~cada 3 frames (~10–15 fps)
+      frameCount = (frameCount + 1) || 1;
+      if (frameCount % 3 === 0) await faceMesh.send({image: inputVideo});
+    },
+    width: 320, height: 240
   });
   camera.start();
 
+  // ====== Bucle de dibujo ======
   function step(){
-    if(running){
-      if(gaze.x!=null && gaze.y!=null){
-        if(!smoothed) smoothed = {x:gaze.x, y:gaze.y};
-        smoothed.x = alpha * gaze.x + (1-alpha) * smoothed.x;
-        smoothed.y = alpha * gaze.y + (1-alpha) * smoothed.y;
-        const x = Math.max(0, Math.min(W-1, smoothed.x));
-        const y = Math.max(0, Math.min(H-1, smoothed.y));
+    if(running && gaze.x!=null && gaze.y!=null){
+      if(!smoothed) smoothed = {x:gaze.x, y:gaze.y};
+      smoothed.x = alpha * gaze.x + (1-alpha) * smoothed.x;
+      smoothed.y = alpha * gaze.y + (1-alpha) * smoothed.y;
 
-        // mover cursor
-        cursor.style.left = x + 'px';
-        cursor.style.top  = y + 'px';
-        cursor.style.width = (brush*2) + 'px';
-        cursor.style.height= (brush*2) + 'px';
+      const x = Math.max(0, Math.min(W-1, smoothed.x));
+      const y = Math.max(0, Math.min(H-1, smoothed.y));
 
-        if(drawing && last){
-          ctx.strokeStyle = 'rgba(0,200,255,0.95)';
-          ctx.lineWidth = brush;
-          ctx.lineJoin = 'round';
-          ctx.lineCap = 'round';
-          ctx.beginPath();
-          ctx.moveTo(last.x, last.y);
-          ctx.lineTo(x, y);
-          ctx.stroke();
-        }
-        last = {x,y};
-        pts.push({t: Date.now(), x, y, drawing: drawing?1:0});
-        stat.textContent = `pts: ${pts.length}`;
+      // cursor (tamaño = 2*brush)
+      cursor.style.left = x + 'px';
+      cursor.style.top  = y + 'px';
+      cursor.style.width = (brush*2) + 'px';
+      cursor.style.height= (brush*2) + 'px';
+
+      if(drawing && last){
+        ctx.strokeStyle = 'rgba(0,200,255,0.95)';
+        ctx.lineWidth = brush;
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(last.x, last.y);
+        ctx.lineTo(x, y);
+        ctx.stroke();
       }
+
+      last = {x, y};
+      pts.push({t: Date.now(), x, y, mar: mar || 0, drawing: drawing ? 1 : 0});
+      stat.textContent = `pts: ${pts.length}`;
     }
+    dbg.textContent = `mirada: x=${gaze.x?gaze.x.toFixed(0):'–'} y=${gaze.y?gaze.y.toFixed(0):'–'} | MAR=${mar?mar.toFixed(3):'–'} | umbral=${mouthThr?mouthThr.toFixed(2):'–'} | dibujando: ${drawing?'sí':'no'}`;
     requestAnimationFrame(step);
   }
   requestAnimationFrame(step);
 
-  // UI
-  startBtn.addEventListener('click', ()=>{ running=true; });
-  stopBtn.addEventListener('click',  ()=>{ running=false; last=null; });
+  // ====== UI ======
+  startBtn.addEventListener('click', ()=>{ running = true; });
+  stopBtn.addEventListener('click',  ()=>{ running = false; last=null; });
   clearBtn.addEventListener('click', ()=>{
     running=false; last=null; smoothed=null; pts.length=0;
     ctx.clearRect(0,0,canvas.width,canvas.height);
   });
+
+  // Guardar PNG
   savePng.addEventListener('click', ()=>{
     const a = document.createElement('a');
     a.download = `gaze_brush_${Date.now()}.png`;
     a.href = canvas.toDataURL('image/png');
     a.click();
   });
+
+  // Guardar CSV
   function toCsv(rows){
-    const header = 't_ms,x,y,drawing\n';
-    const body = rows.map(r => `${r.t},${Math.round(r.x)},${Math.round(r.y)},${r.drawing}`).join('\n');
+    const header = 't_ms,x,y,mar,drawing\n';
+    const body = rows.map(r => `${r.t},${Math.round(r.x)},${Math.round(r.y)},${r.mar.toFixed(4)},${r.drawing}`).join('\n');
     return header + body;
   }
   saveCsv.addEventListener('click', ()=>{
@@ -217,16 +229,20 @@
     URL.revokeObjectURL(url);
   });
 
-  // Resize observer to set canvas logical size
+  // DPI / resize sync del canvas
   const ro = new ResizeObserver(entries=>{
     for(const e of entries){
       const r = e.contentRect;
-      canvas.width = r.width * Math.min(window.devicePixelRatio||1,2);
-      canvas.height= r.height* Math.min(window.devicePixelRatio||1,2);
-      ctx.setTransform(Math.min(window.devicePixelRatio||1,2),0,0,Math.min(window.devicePixelRatio||1,2),0,0);
+      canvas.width  = Math.floor(r.width * dpr);
+      canvas.height = Math.floor(r.height * dpr);
+      ctx.setTransform(dpr,0,0,dpr,0,0);
     }
   });
   ro.observe(canvas);
+
+  // Atajo de prueba: tecla D como “gatillo” manual (por si la boca falla)
+  window.addEventListener('keydown', e => { if(e.key==='d' || e.key==='D') drawing = true; });
+  window.addEventListener('keyup',   e => { if(e.key==='d' || e.key==='D') drawing = false; });
 
 })();
 </script>
