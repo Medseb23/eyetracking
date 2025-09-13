@@ -1,0 +1,209 @@
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gaze Trajectory</title>
+<!-- WebGazer -->
+<script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
+<style>
+  :root { --ui-bg: rgba(0,0,0,.65); --ui-fg: #fff; --accent: #00e676; }
+  html, body { margin:0; padding:0; height:100%; overflow:hidden; background:#111; }
+  #wrap { position:relative; width:100%; height:100vh; }
+  #canvas { position:absolute; inset:0; width:100%; height:100%; background:#111; }
+  #hud {
+    position:absolute; top:12px; left:12px; display:flex; gap:8px; flex-wrap:wrap;
+    background:var(--ui-bg); color:var(--ui-fg); padding:10px 12px; border-radius:12px;
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial;
+  }
+  .btn {
+    appearance:none; border:0; padding:8px 12px; border-radius:10px; cursor:pointer;
+    background:#222; color:#fff; font-weight:600;
+  }
+  .btn.primary { background:var(--accent); color:#111; }
+  .btn.warn { background:#ff5252; }
+  .btn.ghost { background:transparent; border:1px solid #444; }
+  #coord { font: 12px/1.2 monospace; background:#000; color:#0f0; padding:6px 8px; border-radius:8px; }
+  #mini {
+    position:absolute; right:12px; bottom:12px; background:var(--ui-bg); color:#fff;
+    padding:8px 10px; border-radius:10px; font:12px/1.2 monospace;
+  }
+  #webgazerVideoContainer { display:none !important; } /* oculta video/overlays por defecto */
+  label { display:flex; align-items:center; gap:6px; font-size:12px; opacity:.95; }
+  input[type=range] { width:120px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="canvas"></canvas>
+
+  <div id="hud">
+    <button id="start" class="btn primary">▶️ Iniciar</button>
+    <button id="stop" class="btn">⏸️ Pausar</button>
+    <button id="clear" class="btn warn">🧹 Limpiar</button>
+    <button id="savePng" class="btn ghost">🖼️ PNG</button>
+    <button id="saveCsv" class="btn ghost">📄 CSV</button>
+    <span id="coord">x: –, y: –</span>
+    <label>
+      Suavizado
+      <input id="smooth" type="range" min="0" max="0.9" step="0.05" value="0.4">
+    </label>
+    <label>
+      Grosor
+      <input id="thick" type="range" min="1" max="12" step="1" value="3">
+    </label>
+  </div>
+
+  <div id="mini">
+    puntos: <span id="npts">0</span> |
+    fps: <span id="fps">0</span>
+  </div>
+</div>
+
+<script>
+(function(){
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const coord = document.getElementById('coord');
+  const nptsEl = document.getElementById('npts');
+  const fpsEl  = document.getElementById('fps');
+  const startBtn = document.getElementById('start');
+  const stopBtn  = document.getElementById('stop');
+  const clearBtn = document.getElementById('clear');
+  const savePng  = document.getElementById('savePng');
+  const saveCsv  = document.getElementById('saveCsv');
+  const smoothIn = document.getElementById('smooth');
+  const thickIn  = document.getElementById('thick');
+
+  let W = 0, H = 0;
+  let running = false;
+  let last = null;
+  let smoothed = null;
+  let alpha = parseFloat(smoothIn.value);
+  let thickness = parseInt(thickIn.value, 10);
+
+  const points = []; // {t, x, y}
+
+  function resize(){
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = canvas.clientWidth;
+    H = canvas.clientHeight;
+    canvas.width = Math.floor(W * dpr);
+    canvas.height = Math.floor(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    redrawAll();
+  }
+
+  function redrawAll(){
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0,0,W,H);
+    if(points.length<2) return;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(0,230,118,0.9)';
+    ctx.lineWidth = thickness;
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for(let i=1;i<points.length;i++){
+      ctx.lineTo(points[i].x, points[i].y);
+    }
+    ctx.stroke();
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+
+  // FPS meter
+  let frames = 0;
+  let lastFps = performance.now();
+  function tickFps(){
+    frames++;
+    const now = performance.now();
+    if(now - lastFps > 1000){
+      fpsEl.textContent = Math.round((frames * 1000)/(now - lastFps));
+      frames = 0; lastFps = now;
+    }
+    requestAnimationFrame(tickFps);
+  }
+  requestAnimationFrame(tickFps);
+
+  // WebGazer setup
+  window.saveDataAcrossSessions = true;
+  webgazer.setRegression('ridge')
+    .setTracker('TFFacemesh')
+    .begin()
+    .showVideoPreview(false)     // oculto (ya lo forzamos por CSS)
+    .showPredictionPoints(false) // no círculos por defecto
+    .showFaceFeedbackBox(false);
+
+  // Gaze listener
+  webgazer.setGazeListener((data, elapsedTime) => {
+    if(!running || !data) return;
+    const x = data.x; // coords de página
+    const y = data.y;
+
+    coord.textContent = `x: ${x.toFixed(0)}, y: ${y.toFixed(0)}`;
+
+    // Suavizado exponencial simple
+    if(!smoothed){ smoothed = {x, y}; }
+    smoothed.x = alpha * x + (1-alpha) * smoothed.x;
+    smoothed.y = alpha * y + (1-alpha) * smoothed.y;
+
+    const clampedX = Math.max(0, Math.min(W-1, smoothed.x));
+    const clampedY = Math.max(0, Math.min(H-1, smoothed.y));
+
+    // Dibujar segmento desde 'last' a actual
+    if(last){
+      ctx.strokeStyle = 'rgba(0,230,118,0.9)';
+      ctx.lineWidth = thickness;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(last.x, last.y);
+      ctx.lineTo(clampedX, clampedY);
+      ctx.stroke();
+    }
+    last = {x: clampedX, y: clampedY};
+    points.push({t: Date.now(), x: clampedX, y: clampedY});
+    nptsEl.textContent = points.length;
+  });
+
+  // Controles UI
+  startBtn.addEventListener('click', ()=>{ running = true; });
+  stopBtn.addEventListener('click',  ()=>{ running = false; last=null; });
+  clearBtn.addEventListener('click', ()=>{
+    running = false; last=null; smoothed=null;
+    points.length = 0; nptsEl.textContent = 0;
+    redrawAll();
+  });
+  smoothIn.addEventListener('input', ()=>{ alpha = parseFloat(smoothIn.value); });
+  thickIn.addEventListener('input',  ()=>{ thickness = parseInt(thickIn.value,10); redrawAll(); });
+
+  // Guardar PNG
+  savePng.addEventListener('click', ()=>{
+    const link = document.createElement('a');
+    link.download = `gaze_trayectoria_${Date.now()}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  });
+
+  // Guardar CSV
+  function toCsv(rows){
+    const header = 't_ms,x,y\n';
+    const body = rows.map(r => `${r.t},${Math.round(r.x)},${Math.round(r.y)}`).join('\n');
+    return header + body;
+  }
+  saveCsv.addEventListener('click', ()=>{
+    const blob = new Blob([toCsv(points)], {type:'text/csv'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `gaze_coords_${Date.now()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+})();
+</script>
+</body>
+</html>
