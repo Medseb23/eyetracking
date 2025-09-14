@@ -35,6 +35,14 @@
   video#rawVideo{display:none}
   #errbar{position:absolute;bottom:0;left:0;right:0;background:#ff3344;color:#100;padding:6px 10px;font:12px/1.3 monospace;
           display:none;z-index:10001}
+
+  /* --- ROI overlay & targets --- */
+  .roi-overlay{position:absolute;inset:0;pointer-events:none}
+  .roi-rect{position:absolute;border:2px dashed rgba(0,230,118,.9);border-radius:8px;box-shadow:0 0 0 200vmax rgba(0,0,0,.45) inset}
+  .calib-target{position:absolute;width:18px;height:18px;border-radius:50%;background:#00e676;
+                box-shadow:0 0 0 6px rgba(0,230,118,.2);transform:translate(-50%,-50%);pointer-events:auto;cursor:crosshair}
+  .calib-target.wait{background:#fbbf24; box-shadow:0 0 0 6px rgba(251,191,36,.25)}
+  .calib-target.done{background:#22d3ee; box-shadow:0 0 0 6px rgba(34,211,238,.25)}
 </style>
 </head>
 <body>
@@ -44,7 +52,11 @@
     <button id="modeFace" class="btn">1) Test de Boca</button>
     <button id="modeGaze" class="btn">2) Test de Movimiento</button>
     <button id="modeBrush" class="btn primary">3) Iniciar Brocha</button>
-    <button id="calGaze" class="btn">🎯 Calibrar OJOS</button>
+
+    <button id="btnRoi" class="btn">🖱️ Definir zona de mirada (ROI)</button>
+    <button id="btnCalRoi" class="btn">🎯 Calibración guiada (ROI)</button>
+    <button id="btnResetCal" class="btn warn">♻️ Reset Calibración</button>
+
     <button id="togglePreview" class="btn">👁️ Preview</button>
     <button id="clear" class="btn warn">🧹 Limpiar</button>
     <button id="savePng" class="btn">🖼️ PNG</button>
@@ -57,6 +69,7 @@
     <div id="cursor"></div>
     <canvas id="preview"></canvas>
     <video id="rawVideo" playsinline autoplay muted></video>
+    <div class="roi-overlay" id="roiOverlay"></div>
   </div>
 
   <div id="status">
@@ -90,6 +103,7 @@
   const rawVideo=document.getElementById('rawVideo');
   const countEl=document.getElementById('count'); const modeTag=document.getElementById('modeTag');
   const marVal=document.getElementById('marVal'); const marFill=document.getElementById('marFill'); const marThr=document.getElementById('marThr');
+  const roiOverlay=document.getElementById('roiOverlay');
 
   // -------- estado --------
   let mode='face'; // 'face' | 'gmove' | 'brush'
@@ -103,8 +117,13 @@
   let nose={x:null,y:null,z:null};
   let faceBox=null; // bbox para normalizar nariz -> pantalla
 
-  // afín (solo modo ojos)
+  // Calibración afín (solo modo ojos)
   let A=[1,0,0,1], b=[0,0];
+  const LS_KEY='diag_calib_affine_v1';
+  const ROI_KEY='diag_roi_norm_v1';
+
+  // ROI normalizado (0..1 sobre stage)
+  let roiNorm = loadJson(ROI_KEY) || {x0:0.05,y0:0.08,x1:0.95,y1:0.92};
 
   // -------- tamaño --------
   function resize(){
@@ -115,6 +134,7 @@
     preview.width=Math.floor(300*dpr); preview.height=Math.floor(225*dpr);
     preview.style.width='300px'; preview.style.height='225px'; pctx.setTransform(dpr,0,0,dpr,0,0);
     W=r.width; H=r.height;
+    drawRoiRect(); // redibujar ROI
   }
   window.addEventListener('resize', resize); resize();
 
@@ -126,6 +146,11 @@
   document.getElementById('clear').onclick=()=>{ctx.clearRect(0,0,canvas.width,canvas.height); pts=[]; countEl.textContent='pts: 0'; last=null; smoothed=null;};
   document.getElementById('savePng').onclick=()=>{const a=document.createElement('a'); a.download=`brocha_${Date.now()}.png`; a.href=canvas.toDataURL('image/png'); a.click();};
   document.getElementById('saveCsv').onclick=()=>{const header='t_ms,x,y,mar,mode\n'; const body=pts.map(p=>`${p.t},${Math.round(p.x)},${Math.round(p.y)},${(p.mar??0).toFixed(4)},${CFG.controlMode}`).join('\n'); const blob=new Blob([header+body],{type:'text/csv'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`brocha_${CFG.controlMode}_${Date.now()}.csv`; a.click(); URL.revokeObjectURL(url);};
+
+  // ROI & Calibración avanzada
+  document.getElementById('btnRoi').onclick = defineRoiWithMouse;
+  document.getElementById('btnCalRoi').onclick = guidedRoiCalibration;
+  document.getElementById('btnResetCal').onclick = ()=>{ A=[1,0,0,1]; b=[0,0]; saveJson(LS_KEY,{A,b}); alert('Calibración reiniciada.'); };
 
   function setMode(m){
     mode=m;
@@ -165,7 +190,6 @@
     marThr.style.left   = (Math.max(0, Math.min(1, mouthThr/0.8))*100).toFixed(0)+'%';
 
     // --- nariz (posición) ---
-    // tomamos tip de nariz “más saliente”
     const NOSE_IDX=[1,4];
     let nz = main[NOSE_IDX[0]];
     for(const idx of NOSE_IDX){ if(main[idx] && main[idx].z < nz.z) nz = main[idx]; }
@@ -176,7 +200,6 @@
     if(preview.style.display!=='none'){
       pctx.clearRect(0,0,preview.width,preview.height);
       pctx.drawImage(rawVideo,0,0,preview.width,preview.height);
-      // puntos guía
       pctx.fillStyle='#0f0';
       const nx = nose.x*preview.width, ny = nose.y*preview.height;
       pctx.beginPath(); pctx.arc(nx,ny,4,0,Math.PI*2); pctx.fill();
@@ -187,29 +210,18 @@
   // -------- WebGazer (ojos) --------
   try{
     webgazer.setRegression('ridge'); webgazer.setTracker('TFFacemesh');
-    if(webgazer.params){ webgazer.params.showVideoPreview=false; webgazer.params.showFaceFeedbackBox=false; webgazer.params.showPredictionPoints=false; }
+    if(webgazer.params){
+      webgazer.params.showVideoPreview=false;
+      webgazer.params.showFaceFeedbackBox=false;
+      webgazer.params.showPredictionPoints=false;
+    }
     webgazer.begin();
     webgazer.setGazeListener((data)=>{ if(!data) return; gaze.x=data.x; gaze.y=data.y; });
   }catch(e){ showErr('webgazer init: '+e.message); }
 
-  // -------- Calibración OJOS (afín) --------
-  document.getElementById('calGaze').onclick = async ()=>{
-    if(CFG.controlMode!=='eyes'){ alert('El control actual es NARIZ; la calibración de ojos es opcional.'); }
-    const targets=[[0.08,0.08],[0.92,0.08],[0.92,0.92],[0.08,0.92],[0.50,0.50]];
-    let gazePts=[], tgtPts=[];
-    alert('Calibración OJOS: mira esquinas y centro (1.6 s cada una)');
-    for(const [nx,ny] of targets){
-      const r=stageEl.getBoundingClientRect(); const tx=nx*r.width, ty=ny*r.height;
-      const samples=[]; const t0=performance.now();
-      await new Promise(res=>{ function step(){ const t=performance.now();
-        if(gaze.x!=null&&gaze.y!=null) samples.push([gaze.x,gaze.y]);
-        if(t-t0<1600) requestAnimationFrame(step); else res();
-      } requestAnimationFrame(step); });
-      const [gx,gy]=mean2(samples); if(!isNaN(gx)&&!isNaN(gy)){ gazePts.push([gx,gy]); tgtPts.push([tx,ty]); }
-      await sleep(200);
-    }
-    const sol=lsqAffine(gazePts,tgtPts); if(sol){A=sol.A; b=sol.b; alert('Calibración OK ✅');} else alert('No se pudo calibrar');
-  };
+  // -------- Cargar calibración previa --------
+  const saved = loadJson(LS_KEY);
+  if(saved && saved.A && saved.b){ A=saved.A; b=saved.b; }
 
   // -------- bucle principal: mover + pintar --------
   function loop(){
@@ -218,7 +230,8 @@
 
     if(CFG.controlMode==='eyes' && gaze.x!=null && gaze.y!=null){
       const r=stageEl.getBoundingClientRect();
-      const gx = gaze.x - r.left, gy = gaze.y - r.top;           // ventana -> stage
+      // ventana -> stage
+      const gx = gaze.x - r.left, gy = gaze.y - r.top;
       // suavizado
       if(!smoothed) smoothed={x:gx,y:gy};
       smoothed.x = alpha*gx + (1-alpha)*smoothed.x;
@@ -268,14 +281,157 @@
   requestAnimationFrame(loop);
   requestAnimationFrame(faceLoop);
 
+  // ================================
+  //   Calibración ROI Avanzada
+  // ================================
+  function defineRoiWithMouse(){
+    alert('Arrastra con el mouse para dibujar la zona (ROI) donde mirarás con los ojos.');
+    const r=stageEl.getBoundingClientRect();
+    let start=null, rectEl=null;
+
+    function onDown(e){
+      start={x:e.clientX - r.left, y:e.clientY - r.top};
+      if(!rectEl){
+        rectEl=document.createElement('div');
+        rectEl.className='roi-rect';
+        roiOverlay.appendChild(rectEl);
+      }
+      placeRect(start.x,start.y,1,1);
+      window.addEventListener('mousemove',onMove);
+      window.addEventListener('mouseup',onUp,{once:true});
+    }
+    function onMove(e){
+      const x=e.clientX - r.left, y=e.clientY - r.top;
+      const x0=Math.min(start.x,x), y0=Math.min(start.y,y);
+      const x1=Math.max(start.x,x), y1=Math.max(start.y,y);
+      placeRect(x0,y0, x1-x0, y1-y0);
+    }
+    function onUp(e){
+      window.removeEventListener('mousemove',onMove);
+      const bb=rectEl.getBoundingClientRect();
+      // Normalizar a [0..1] relativo al stage
+      const x0=(bb.left - r.left)/r.width, y0=(bb.top - r.top)/r.height;
+      const x1=(bb.right - r.left)/r.width, y1=(bb.bottom - r.top)/r.height;
+      roiNorm = {x0:clamp01(x0), y0:clamp01(y0), x1:clamp01(x1), y1:clamp01(y1)};
+      saveJson(ROI_KEY, roiNorm);
+      alert('ROI guardada. Ahora puedes ejecutar la Calibración guiada.');
+    }
+    stageEl.addEventListener('mousedown',onDown,{once:true});
+
+    function placeRect(x,y,w,h){
+      rectEl.style.left=x+'px';
+      rectEl.style.top=y+'px';
+      rectEl.style.width=w+'px';
+      rectEl.style.height=h+'px';
+    }
+  }
+
+  function drawRoiRect(){
+    roiOverlay.innerHTML='';
+    const r=stageEl.getBoundingClientRect();
+    const x0=roiNorm.x0*r.width, y0=roiNorm.y0*r.height;
+    const w =(roiNorm.x1-roiNorm.x0)*r.width;
+    const h =(roiNorm.y1-roiNorm.y0)*r.height;
+    const rectEl=document.createElement('div');
+    rectEl.className='roi-rect';
+    rectEl.style.left=x0+'px'; rectEl.style.top=y0+'px';
+    rectEl.style.width=w+'px'; rectEl.style.height=h+'px';
+    roiOverlay.appendChild(rectEl);
+  }
+
+  async function guidedRoiCalibration(){
+    if(CFG.controlMode!=='eyes'){
+      alert('La calibración guiada aplica al control por OJOS. Cambia “Mover brocha con” a OJOS y vuelve a intentar.');
+      return;
+    }
+    const r=stageEl.getBoundingClientRect();
+    const rx0=roiNorm.x0*r.width, ry0=roiNorm.y0*r.height;
+    const rw =(roiNorm.x1-roiNorm.x0)*r.width;
+    const rh =(roiNorm.y1-roiNorm.y0)*r.height;
+
+    // Definimos 9 objetivos: 4 esquinas, centro, 4 puntos medios
+    const nx=[0,0.5,1], ny=[0,0.5,1];
+    const targets=[];
+    for(const ix of nx) for(const iy of ny){
+      targets.push({ x: rx0 + ix*rw, y: ry0 + iy*rh });
+    }
+
+    roiOverlay.innerHTML='';
+    drawRoiRect();
+    // Crear elementos clicables
+    const els=[];
+    for(const t of targets){
+      const el=document.createElement('div');
+      el.className='calib-target wait';
+      el.style.left=t.x+'px'; el.style.top=t.y+'px';
+      roiOverlay.appendChild(el);
+      els.push(el);
+    }
+
+    alert('Calibración: haz clic en cada punto y MIRA ese punto. Tras el clic, mantén tu mirada fija ~1.2s hasta que cambie de color.');
+
+    const gazePts=[], tgtPts=[];
+    for(let i=0;i<targets.length;i++){
+      const el=els[i]; const t=targets[i];
+      await new Promise(res=>{
+        const onceClick = async (ev)=>{
+          el.classList.remove('wait'); el.classList.add('calib-target');
+          // Recolectar muestras de gaze 1200 ms
+          const samples=[];
+          const t0=performance.now();
+          function step(){
+            const now=performance.now();
+            if(gaze.x!=null&&gaze.y!=null){
+              // stage coords nativos
+              samples.push([gaze.x - r.left, gaze.y - r.top]);
+            }
+            if(now-t0<1200){ requestAnimationFrame(step); }
+            else{
+              const m=mean2(samples);
+              if(!isNaN(m[0])){ gazePts.push(m); tgtPts.push([t.x, t.y]); }
+              el.classList.add('done');
+              res();
+            }
+          }
+          requestAnimationFrame(step);
+        };
+        el.addEventListener('click', onceClick, {once:true});
+      });
+      await sleep(150);
+    }
+
+    const sol=lsqAffine(gazePts, tgtPts);
+    if(sol){
+      A=sol.A; b=sol.b;
+      saveJson(LS_KEY, {A,b});
+      alert('✅ Calibración afín completada y guardada.');
+    }else{
+      alert('No se pudo calibrar (muestras insuficientes o degeneradas).');
+    }
+  }
+
   // -------- utils --------
   function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
   function mean2(a){if(!a.length)return[NaN,NaN];const sx=a.reduce((s,v)=>s+v[0],0), sy=a.reduce((s,v)=>s+v[1],0);return[sx/a.length, sy/a.length];}
+  function clamp01(v){return Math.max(0,Math.min(1,v));}
   function transpose(A){const m=A.length,n=A[0].length,AT=Array.from({length:n},()=>Array(m).fill(0));for(let i=0;i<m;i++)for(let j=0;j<n;j++)AT[j][i]=A[i][j];return AT;}
   function mul(A,B){const m=A.length,n=A[0].length,p=B[0].length,C=Array.from({length:m},()=>Array(p).fill(0));for(let i=0;i<m;i++)for(let k=0;k<n;k++)for(let j=0;j<p;j++)C[i][j]+=A[i][k]*B[k][j];return C;}
   function mulVec(A,v){const m=A.length,n=A[0].length,r=Array(m).fill(0);for(let i=0;i<m;i++)for(let j=0;j<n;j++)r[i]+=A[i][j]*v[j];return r;}
   function solveGaussian(A,b){const n=A.length,M=A.map((row,i)=>row.concat([b[i]]));for(let i=0;i<n;i++){let max=i;for(let r=i+1;r<n;r++)if(Math.abs(M[r][i])>Math.abs(M[max][i]))max=r;if(Math.abs(M[max][i])<1e-9)return null;[M[i],M[max]]=[M[max],M[i]];const piv=M[i][i];for(let k=i;k<=n;k++)M[i][k]/=piv;for(let r=0;r<n;r++)if(r!==i){const f=M[r][i];for(let k=i;k<=n;k++)M[r][k]-=f*M[i][k];}}return M.map(row=>row[n]);}
-  function lsqAffine(gPts,tPts){const M=[],Z=[];for(let i=0;i<gPts.length;i++){const[gx,gy]=gPts[i];const[tx,ty]=tPts[i];M.push([gx,gy,0,0,1,0]);Z.push(tx);M.push([0,0,gx,gy,0,1]);Z.push(ty);}const Mt=transpose(M),MtM=mul(Mt,M),MtZ=mulVec(Mt,Z),p=solveGaussian(MtM,MtZ);return p?{A:[p[0],p[1],p[2],p[3]],b:[p[4],p[5]]}:null;}
+  function lsqAffine(gPts,tPts){
+    if(!gPts.length || gPts.length<3) return null; // afín 6 params → ≥3 pares
+    const M=[],Z=[];
+    for(let i=0;i<gPts.length;i++){
+      const[gx,gy]=gPts[i]; const[tx,ty]=tPts[i];
+      M.push([gx,gy,0,0,1,0]); Z.push(tx);
+      M.push([0,0,gx,gy,0,1]); Z.push(ty);
+    }
+    const Mt=transpose(M),MtM=mul(Mt,M),MtZ=mulVec(Mt,Z),p=solveGaussian(MtM,MtZ);
+    return p?{A:[p[0],p[1],p[2],p[3]],b:[p[4],p[5]]}:null;
+  }
+  function saveJson(k,v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+  function loadJson(k){ try{ const s=localStorage.getItem(k); return s?JSON.parse(s):null; }catch(e){ return null; } }
+
 })();
 </script>
 </body>
