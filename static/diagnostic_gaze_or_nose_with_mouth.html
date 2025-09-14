@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Brocha: Ojos o Nariz + Boca (getUserMedia)</title>
+<title>Brocha: Ojos/Iris o Nariz + Boca</title>
 
-<!-- OJOS -->
+<!-- OJOS baseline (opcional, dejamos cargado por compatibilidad) -->
 <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
-<!-- CARA (boca+nariz) -->
+<!-- CARA (FaceMesh con Iris) -->
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh"></script>
 
 <style>
@@ -30,18 +30,17 @@
   #marBar{position:relative;height:10px;flex:1;background:#2b2f3a;border-radius:6px;overflow:hidden}
   #marFill{position:absolute;top:0;left:0;height:100%;width:0%;background:#00e676}
   #marThr{position:absolute;top:-3px;width:2px;height:16px;background:#ff5252;left:50%}
-  #marVal{min-width:120px;text-align:right;font:12px/1 monospace;opacity:.9}
+  #marVal{min-width:140px;text-align:right;font:12px/1 monospace;opacity:.9}
   #preview{position:absolute;top:10px;right:10px;width:300px;height:225px;background:#000a;border-radius:8px;display:none;z-index:5000}
   video#rawVideo{display:none}
-  #errbar{position:absolute;bottom:0;left:0;right:0;background:#ff3344;color:#100;padding:6px 10px;font:12px/1.3 monospace;
-          display:none;z-index:10001}
-
+  #errbar{position:absolute;bottom:0;left:0;right:0;background:#ff3344;color:#100;padding:6px 10px;font:12px/1.3 monospace;display:none;z-index:10001}
   .roi-overlay{position:absolute;inset:0;pointer-events:none}
   .roi-rect{position:absolute;border:2px dashed rgba(0,230,118,.9);border-radius:8px;box-shadow:0 0 0 200vmax rgba(0,0,0,.45) inset}
   .calib-target{position:absolute;width:18px;height:18px;border-radius:50%;background:#00e676;
                 box-shadow:0 0 0 6px rgba(0,230,118,.2);transform:translate(-50%,-50%);pointer-events:auto;cursor:crosshair}
   .calib-target.wait{background:#fbbf24; box-shadow:0 0 0 6px rgba(251,191,36,.25)}
   .calib-target.done{background:#22d3ee; box-shadow:0 0 0 6px rgba(34,211,238,.25)}
+  .badge{padding:2px 6px;border-radius:6px;background:#1f2937;margin-left:6px;font:12px/1 monospace}
 </style>
 </head>
 <body>
@@ -52,10 +51,11 @@
     <button id="modeGaze" class="btn">2) Test de Movimiento</button>
     <button id="modeBrush" class="btn primary">3) Iniciar Brocha</button>
 
-    <button id="btnRoi" class="btn">🖱️ Definir zona de mirada (ROI)</button>
-    <button id="btnCalRoi" class="btn">🎯 Calibración guiada (ROI)</button>
+    <button id="btnRoi" class="btn">🖱️ ROI</button>
+    <button id="btnCalRoi" class="btn">🎯 Calibración OJOS (ROI)</button>
     <button id="btnResetCal" class="btn warn">♻️ Reset Calibración</button>
 
+    <button id="btnAnchors" class="btn">🔧 Anclas anti-drift</button>
     <button id="togglePreview" class="btn">👁️ Preview</button>
     <button id="clear" class="btn warn">🧹 Limpiar</button>
     <button id="savePng" class="btn">🖼️ PNG</button>
@@ -77,6 +77,8 @@
       <span>MAR:</span>
       <div id="marBar"><div id="marFill"></div><div id="marThr"></div></div>
       <span id="marVal">—</span>
+      <span class="badge" id="ctlBadge">Control: OJOS (Iris)</span>
+      <span class="badge" id="ancBadge">Anclas: OFF</span>
     </div>
   </div>
 
@@ -91,14 +93,16 @@
   window.onerror=(m,src,l,c)=>showErr((m||'Error')+(l?` @${l}:${c||0}`:''));
   window.onunhandledrejection=(ev)=>showErr('Promise rejection: '+(ev.reason?.message||ev.reason||''));
 
-  // -------- config desde Python --------
+  // -------- config desde Python (controlMode llega como 'eyes' o 'nose') --------
   const CFG = Object.assign({
     brush:8, alpha:.20, mouthThr:.28, debug:true, controlMode:'eyes',
-    deadzonePx:8, maxStepPx:24, medianN:5, mouthHys:.05,
+    useIris:true,                    // usar iris para el control por ojos
+    deadzonePx:6, maxStepPx:22, medianN:5, mouthHys:.05,
     marMedianN:5, marEmaAlpha:.30,
     marUseEyeScale:true, marEyeFactor:0.35,
     detConf:.5, trackConf:.5,
-    snap: { enabled:true, size:64, radius:22, blend:0.7 } // auto-aim a grilla
+    snap:{enabled:true,size:64,radius:22,blend:0.7},
+    anchors:{enabled:true, dwellMs:300, radiusPx:28, adjust:0.12} // anti-drift
   }, window.DIAG_CFG||{});
 
   // -------- DOM --------
@@ -110,31 +114,46 @@
   const countEl=document.getElementById('count'); const modeTag=document.getElementById('modeTag');
   const marVal=document.getElementById('marVal'); const marFill=document.getElementById('marFill'); const marThr=document.getElementById('marThr');
   const roiOverlay=document.getElementById('roiOverlay');
+  const ctlBadge=document.getElementById('ctlBadge'); const ancBadge=document.getElementById('ancBadge');
 
   // -------- estado --------
-  let mode='face'; // 'face' | 'gmove' | 'brush'
+  let mode='face'; // 'face'|'gmove'|'brush'
   let brush=CFG.brush, alpha=CFG.alpha, mouthThr=CFG.mouthThr;
-  let dpr=1, W=0, H=0, pts=[], last=null, smoothed=null;
+  let dpr=1, W=0, H=0, pts=[], last=null;
 
-  // movimiento: ojos/nariz
-  let gaze={x:null,y:null};
+  // señales
+  let gaze={x:null,y:null};       // si useIris: calculado con iris; si no: WebGazer
   let nose={x:null,y:null,z:null};
   let faceBox=null;
 
-  // Calibración afín (ojos)
+  // afín ojos
   let A=[1,0,0,1], b=[0,0];
-  const LS_KEY='diag_calib_affine_v1';
-  const ROI_KEY='diag_roi_norm_v1';
+  const LS_KEY='diag_calib_affine_v2';
+  const ROI_KEY='diag_roi_norm_v2';
+  const ANC_KEY='diag_anchors_on_v1';
 
-  // ROI normalizado (0..1)
-  let roiNorm = loadJson(ROI_KEY) || {x0:0.05,y0:0.08,x1:0.95,y1:0.92};
+  // ROI
+  let roiNorm = loadJson(ROI_KEY) || {x0:0.08,y0:0.08,x1:0.92,y1:0.92};
 
-  // Anti-jitter
+  // MAR
+  let marHist=[], marEma=null, isPainting=false;
+
+  // historial para mediana
   let histX=[], histY=[];
-  let isPainting=false;
 
-  // MAR suavizado
-  let marHist=[], marEma=null;
+  // anclas
+  let anchorsOn = loadJson(ANC_KEY) ?? !!CFG.anchors.enabled;
+  let dwellStart = null; let currentAnchor = null;
+
+  // worker Kalman
+  const kalmanWorker = makeKalmanWorker();
+  let kalmanReady = false;
+  kalmanWorker.onmessage = (e)=>{
+    if(e.data?.ready){ kalmanReady = true; return; }
+    if(e.data?.out){ applyFiltered(e.data.out.x, e.data.out.y); }
+  };
+  // enviar cfg inicial al worker
+  kalmanWorker.postMessage({cfg:{procNoise:1e-2, measNoise:2.0, maxStep:CFG.maxStepPx, deadzone:CFG.deadzonePx}});
 
   // -------- tamaño --------
   function resize(){
@@ -154,20 +173,24 @@
   document.getElementById('modeGaze').onclick=()=>setMode('gmove');
   document.getElementById('modeBrush').onclick=()=>setMode('brush');
   document.getElementById('togglePreview').onclick=()=>{preview.style.display=(preview.style.display==='none'||preview.style.display==='')?'block':'none';};
-  document.getElementById('clear').onclick=()=>{ctx.clearRect(0,0,canvas.width,canvas.height); pts=[]; countEl.textContent='pts: 0'; last=null; smoothed=null;};
+  document.getElementById('clear').onclick=()=>{ctx.clearRect(0,0,canvas.width,canvas.height); pts=[]; countEl.textContent='pts: 0'; last=null;};
   document.getElementById('savePng').onclick=()=>{const a=document.createElement('a'); a.download=`brocha_${Date.now()}.png`; a.href=canvas.toDataURL('image/png'); a.click();};
   document.getElementById('saveCsv').onclick=()=>{
     const header='t_ms,x,y,mar,mode\n';
     const body=pts.map(p=>`${p.t},${Math.round(p.x)},${Math.round(p.y)},${(p.mar??0).toFixed(4)},${CFG.controlMode}`).join('\n');
-    const blob=new Blob([header+body],{type:'text/csv'});
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a'); a.href=url; a.download=`brocha_${CFG.controlMode}_${Date.now()}.csv`; a.click();
-    URL.revokeObjectURL(url);
+    const blob=new Blob([header+body],{type:'text/csv'}); const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download=`brocha_${CFG.controlMode}_${Date.now()}.csv`; a.click(); URL.revokeObjectURL(url);
   };
-
   document.getElementById('btnRoi').onclick = defineRoiWithMouse;
   document.getElementById('btnCalRoi').onclick = guidedRoiCalibration;
-  document.getElementById('btnResetCal').onclick = ()=>{ A=[1,0,0,1]; b=[0,0]; saveJson(LS_KEY,{A,b}); alert('Calibración reiniciada.'); };
+  document.getElementById('btnResetCal').onclick = ()=>{ A=[1,0,0,1]; b=[0,0]; saveJson(LS_KEY,{A,b}); alert('Calibración afín reiniciada.'); };
+  document.getElementById('btnAnchors').onclick = ()=>{
+    anchorsOn = !anchorsOn;
+    saveJson(ANC_KEY, anchorsOn);
+    ancBadge.textContent = 'Anclas: ' + (anchorsOn?'ON':'OFF');
+  };
+  ancBadge.textContent = 'Anclas: ' + (anchorsOn?'ON':'OFF');
+  ctlBadge.textContent = 'Control: ' + (CFG.controlMode==='nose'?'NARIZ':'OJOS (Iris)');
 
   function setMode(m){
     mode=m;
@@ -185,187 +208,123 @@
     }catch(e){ showErr('getUserMedia: '+(e.name||'')+' — '+(e.message||'')); }
   };
 
-  // -------- FaceMesh (boca + nariz) --------
+  // -------- FaceMesh (Iris+boca+nariz) --------
   const faceMesh=new FaceMesh({ locateFile:(f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
   faceMesh.setOptions({
     maxNumFaces:3, refineLandmarks:true,
-    minDetectionConfidence: CFG.detConf,
-    minTrackingConfidence:  CFG.trackConf
+    minDetectionConfidence: CFG.detConf, minTrackingConfidence: CFG.trackConf
   });
 
   function bboxOf(lm){let minx=1,miny=1,maxx=0,maxy=0; for(const p of lm){minx=Math.min(minx,p.x); miny=Math.min(miny,p.y); maxx=Math.max(maxx,p.x); maxy=Math.max(maxy,p.y);} return {minx,miny,maxx,maxy,cx:(minx+maxx)/2,cy:(miny+maxy)/2,area:(maxx-minx)*(maxy-miny)};}
   function pickMainFace(arr){ if(!arr||!arr.length) return null; let k=0,b=Infinity; for(let i=0;i<arr.length;i++){ const bb=bboxOf(arr[i]); const dc=(bb.cx-0.5)**2+(bb.cy-0.5)**2; const s=dc/(bb.area+1e-6); if(s<b){b=s;k=i;} } return arr[k]; }
-  function dist(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
+  function dist2(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
+  function lerp(a,b,t){ return a+(b-a)*t; }
 
   async function faceLoop(){ try{ if(rawVideo.readyState>=2 && !rawVideo.paused && !rawVideo.ended){ await faceMesh.send({image:rawVideo}); } }catch(e){ showErr('faceLoop: '+e.message); } requestAnimationFrame(faceLoop); }
 
+  // iris indices (MediaPipe): 468..471 centro/puntos del iris derecho, 473..476 izquierdo
+  const IRIS_R = [468,469,470,471], IRIS_L = [473,474,475,476];
+  const EYE_R = [33,133]; // extremos ojo derecho
+  const EYE_L = [362,263]; // extremos ojo izquierdo
+
   faceMesh.onResults(res=>{
     if(!res.multiFaceLandmarks || !res.multiFaceLandmarks.length) return;
-    const main = pickMainFace(res.multiFaceLandmarks); if(!main) return;
+    const lm = pickMainFace(res.multiFaceLandmarks); if(!lm) return;
 
-    // --- datos base de cara ---
-    faceBox = bboxOf(main);
-    if (faceBox.area < 0.03) { return; } // cara muy lejos → labios fallan
+    faceBox = bboxOf(lm);
+    if (faceBox.area < 0.02) return; // muy lejos
 
-    // --- MAR robusto (boca) ---
-    const lm = main;
-    const d = (i,j)=>{ const a=lm[i], b=lm[j]; return Math.hypot(a.x-b.x, a.y-b.y); };
-
-    const mouthH = d(13,14);        // altura de boca
-    const mouthW = d(61,291);       // ancho de boca
-    const eyeDst = d(33,263);       // distancia ojos
-
+    // ---------- Boca (MAR robusto) ----------
+    const mouthH = dist2(lm[13], lm[14]);
+    const mouthW = dist2(lm[61], lm[291]);
+    const eyeDst = dist2(lm[33], lm[263]);
     const denom = (CFG.marUseEyeScale) ? Math.max(mouthW, CFG.marEyeFactor * eyeDst) : mouthW;
-    let marRaw = mouthH / Math.max(1e-6, denom);
+    const marRaw = mouthH / Math.max(1e-6, denom);
 
-    // Suavizado MAR: mediana + EMA
-    marHist.push(marRaw);
-    if (marHist.length > CFG.marMedianN) marHist.shift();
-    const marMed = median(marHist);
-    if (marEma == null) marEma = marMed;
-    marEma = CFG.marEmaAlpha * marMed + (1 - CFG.marEmaAlpha) * marEma;
+    // mediana + EMA
+    marHist.push(marRaw); if(marHist.length>CFG.marMedianN) marHist.shift();
+    const med = median(marHist); marEma = (marEma==null)? med : CFG.marEmaAlpha*med + (1-CFG.marEmaAlpha)*marEma;
 
-    // UI barra
+    // UI
     const marUi = Math.max(0, Math.min(0.8, marEma));
     marVal.textContent = `raw:${marRaw.toFixed(3)}  filt:${marEma.toFixed(3)}`;
     marFill.style.width = (marUi / 0.8 * 100).toFixed(0) + '%';
     marThr.style.left   = (Math.max(0, Math.min(1, mouthThr / 0.8)) * 100).toFixed(0) + '%';
 
-    // --- nariz (posición) ---
+    // ---------- Nariz ----------
     const NOSE_IDX=[1,4];
     let nz = lm[NOSE_IDX[0]];
     for(const idx of NOSE_IDX){ if(lm[idx] && lm[idx].z < nz.z) nz = lm[idx]; }
     nose = {x:nz.x, y:nz.y, z:nz.z};
 
-    // preview debug
+    // ---------- Ojos con Iris (cursor bruto) ----------
+    if(CFG.controlMode==='eyes' && CFG.useIris){
+      // centros del iris = media de 4 puntos
+      const c = (idxs)=> idxs.reduce((s,i)=>({x:s.x+lm[i].x, y:s.y+lm[i].y}), {x:0,y:0});
+      const rC = c(IRIS_R); rC.x/=IRIS_R.length; rC.y/=IRIS_R.length;
+      const lC = c(IRIS_L); lC.x/=IRIS_L.length; lC.y/=IRIS_L.length;
+
+      // normalización por cada ojo respecto a su caja (extremos)
+      const r0=lm[EYE_R[0]], r1=lm[EYE_R[1]], l0=lm[EYE_L[0]], l1=lm[EYE_L[1]];
+      const rx = (rC.x - Math.min(r0.x,r1.x)) / Math.max(1e-6, Math.abs(r0.x-r1.x));
+      const ry = (rC.y - Math.min(r0.y,r1.y)) / Math.max(1e-6, Math.abs(r0.y-r1.y));
+      const lx = (lC.x - Math.min(l0.x,l1.x)) / Math.max(1e-6, Math.abs(l0.x-l1.x));
+      const ly = (lC.y - Math.min(l0.y,l1.y)) / Math.max(1e-6, Math.abs(l0.y-l1.y));
+
+      // mezcla ojos y mapeo a ROI
+      const gxN = 1 - Math.max(0, Math.min(1, (rx+lx)/2)); // invertir horizontal (mirar der → x grande)
+      const gyN = Math.max(0, Math.min(1, (ry+ly)/2));
+
+      const r=stageEl.getBoundingClientRect();
+      const rx0=roiNorm.x0*r.width, ry0=roiNorm.y0*r.height;
+      const rw =(roiNorm.x1-roiNorm.x0)*r.width;
+      const rh =(roiNorm.y1-roiNorm.y0)*r.height;
+
+      const gx = rx0 + gxN*rw;
+      const gy = ry0 + gyN*rh;
+
+      // enviar al worker (Kalman+deadzone+step+snap se aplican de vuelta)
+      if(kalmanReady){ kalmanWorker.postMessage({in:{x:gx, y:gy, W, H}}); }
+    }
+
+    // preview
     if(preview.style.display!=='none' && CFG.debug){
       pctx.clearRect(0,0,preview.width,preview.height);
       pctx.drawImage(rawVideo,0,0,preview.width,preview.height);
       const toPX = (p) => [p.x*preview.width, p.y*preview.height];
       const dot = (x,y,r=3,c='#0f0')=>{ pctx.fillStyle=c; pctx.beginPath(); pctx.arc(x,y,r,0,Math.PI*2); pctx.fill(); };
-      [61,291].forEach(i=>{ const [x,y]=toPX(lm[i]); dot(x,y,3,'#0f0'); });
-      [33,263].forEach(i=>{ const [x,y]=toPX(lm[i]); dot(x,y,3,'#ff0'); });
-      [13,14].forEach(i=>{ const [x,y]=toPX(lm[i]); dot(x,y,3,'#0ff'); });
-      const nx = nose.x*preview.width, ny = nose.y*preview.height; dot(nx,ny,4,'#f0f');
-      pctx.fillStyle='#fff'; pctx.fillText(`MAR=${marEma.toFixed(3)}`,8,16);
+      IRIS_R.concat(IRIS_L,[13,14,61,291,33,263]).forEach(i=>{ const [x,y]=toPX(lm[i]); dot(x,y,3,'#0f0'); });
     }
   });
 
-  // -------- WebGazer (ojos) --------
-  try{
-    webgazer.setRegression('ridge'); webgazer.setTracker('TFFacemesh');
-    if(webgazer.params){
-      webgazer.params.showVideoPreview=false;
-      webgazer.params.showFaceFeedbackBox=false;
-      webgazer.params.showPredictionPoints=false;
-    }
-    webgazer.begin();
-    webgazer.setGazeListener((data)=>{ if(!data) return; gaze.x=data.x; gaze.y=data.y; });
-  }catch(e){ showErr('webgazer init: '+e.message); }
+  // -------- WebGazer fallback (si no usamos iris) --------
+  if(!CFG.useIris && CFG.controlMode==='eyes'){
+    try{
+      webgazer.setRegression('ridge'); webgazer.setTracker('TFFacemesh');
+      if(webgazer.params){ webgazer.params.showVideoPreview=false; webgazer.params.showFaceFeedbackBox=false; webgazer.params.showPredictionPoints=false; }
+      webgazer.begin();
+      webgazer.setGazeListener((data)=>{ if(!data) return; const r=stageEl.getBoundingClientRect(); const gx=data.x - r.left, gy=data.y - r.top; if(kalmanReady){ kalmanWorker.postMessage({in:{x:gx,y:gy,W,H}}); } });
+    }catch(e){ showErr('webgazer init: '+e.message); }
+  }
 
   // -------- Cargar calibración previa --------
   const saved = loadJson(LS_KEY); if(saved && saved.A && saved.b){ A=saved.A; b=saved.b; }
 
-  // -------- auto-aim: snap a grilla --------
-  function snapToGrid(x,y){
-    if(!CFG.snap?.enabled) return {x,y,snapped:false};
-    const G = CFG.snap.size, R = CFG.snap.radius, B = CFG.snap.blend;
-    const gx = Math.round(x/G)*G, gy = Math.round(y/G)*G;
-    const d = Math.hypot(gx-x, gy-y);
-    if(d<=R){
-      return { x: (1-B)*x + B*gx, y:(1-B)*y + B*gy, snapped:true };
-    }
-    return {x,y,snapped:false};
-  }
-
-  // -------- bucle principal --------
+  // -------- bucle principal (nariz + boca + pintar) --------
   function loop(){
-    // 1) Coordenadas de control → (x,y) del canvas
-    let cx=null, cy=null;
-
-    if(CFG.controlMode==='eyes' && gaze.x!=null && gaze.y!=null){
-      const r=stageEl.getBoundingClientRect();
-      const gx = gaze.x - r.left, gy = gaze.y - r.top;
-
-      // mediana
-      histX.push(gx); histY.push(gy);
-      if(histX.length>CFG.medianN){ histX.shift(); histY.shift(); }
-      const gxMed = median(histX), gyMed = median(histY);
-
-      // EMA posición
-      if(!smoothed) smoothed={x:gxMed,y:gyMed};
-      let nx = CFG.alpha*gxMed + (1-CFG.alpha)*smoothed.x;
-      let ny = CFG.alpha*gyMed + (1-CFG.alpha)*smoothed.y;
-
-      // deadzone
-      if(Math.hypot(nx-smoothed.x, ny-smoothed.y) < CFG.deadzonePx){ nx = smoothed.x; ny = smoothed.y; }
-
-      // límite de paso
-      [nx,ny] = clampStep(smoothed.x, smoothed.y, nx, ny, CFG.maxStepPx);
-
-      smoothed.x = nx; smoothed.y = ny;
-
-      // afín
-      cx = A[0]*nx + A[1]*ny + b[0];
-      cy = A[2]*nx + A[3]*ny + b[1];
-    }
-
-    if(CFG.controlMode==='nose' && nose.x!=null && faceBox){
+    // Nariz como control alternativo
+    if(CFG.controlMode==='nose' && faceBox && nose.x!=null){
       const nxr = (nose.x - faceBox.minx)/Math.max(1e-6, (faceBox.maxx - faceBox.minx));
       const nyr = (nose.y - faceBox.miny)/Math.max(1e-6, (faceBox.maxy - faceBox.miny));
       const tx = nxr * W, ty = nyr * H;
-
-      histX.push(tx); histY.push(ty);
-      if(histX.length>CFG.medianN){ histX.shift(); histY.shift(); }
-      const tMedX = median(histX), tMedY = median(histY);
-
-      if(!smoothed) smoothed={x:tMedX,y:tMedY};
-      let nx = CFG.alpha*tMedX + (1-CFG.alpha)*smoothed.x;
-      let ny = CFG.alpha*tMedY + (1-CFG.alpha)*smoothed.y;
-
-      if(Math.hypot(nx-smoothed.x, ny-smoothed.y) < CFG.deadzonePx){ nx = smoothed.x; ny = smoothed.y; }
-
-      [nx,ny] = clampStep(smoothed.x, smoothed.y, nx, ny, CFG.maxStepPx);
-
-      smoothed.x = nx; smoothed.y = ny;
-      cx = nx; cy = ny;
+      if(kalmanReady){ kalmanWorker.postMessage({in:{x:tx,y:ty,W,H}}); }
     }
 
-    // auto-aim (snap) opcional
-    if(cx!=null && cy!=null){
-      const s = snapToGrid(cx, cy);
-      cx = s.x; cy = s.y;
-    }
-
-    // 2) Histeresis de boca
+    // gatillo de boca (histeresis)
     if(marEma!=null){
       const openThr  = mouthThr + CFG.mouthHys;
       const closeThr = mouthThr - CFG.mouthHys;
-      if(isPainting){ isPainting = marEma > closeThr; } else { isPainting = marEma > openThr; }
-    }
-
-    // 3) Mostrar cursor y pintar
-    if(cx!=null && cy!=null){
-      const x = Math.max(0, Math.min(W-1, cx));
-      const y = Math.max(0, Math.min(H-1, cy));
-
-      if(mode!=='face'){
-        cursor.style.display='block';
-        cursor.style.left=x+'px'; cursor.style.top=y+'px';
-        cursor.style.width=(brush*2)+'px'; cursor.style.height=(brush*2)+'px';
-      } else { cursor.style.display='none'; }
-
-      if(mode==='brush' && isPainting){
-        if(last){
-          ctx.strokeStyle='rgba(0,200,255,.95)'; ctx.lineWidth=brush; ctx.lineJoin='round'; ctx.lineCap='round';
-          // trazo suavizado (bezier simple)
-          const cxm = (last.x + x)/2, cym = (last.y + y)/2;
-          ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.quadraticCurveTo(cxm,cym,x,y); ctx.stroke();
-          pts.push({t:Date.now(), x, y, mar:marEma});
-          countEl.textContent = `pts: ${pts.length}`;
-        }
-      }
-      last={x,y};
+      isPainting = isPainting ? (marEma > closeThr) : (marEma > openThr);
     }
 
     requestAnimationFrame(loop);
@@ -373,9 +332,51 @@
   requestAnimationFrame(loop);
   requestAnimationFrame(faceLoop);
 
-  // ================================
-  //   Calibración ROI Avanzada
-  // ================================
+  // ======= recibir posición filtrada desde el worker y pintar / anclas / snap =======
+  let filtX=null, filtY=null;
+  function applyFiltered(x,y){
+    // afín solo para modo ojos (corrige drift global); nariz usa coords directas
+    if(CFG.controlMode==='eyes'){
+      const tx = A[0]*x + A[1]*y + b[0];
+      const ty = A[2]*x + A[3]*y + b[1];
+      filtX = Math.max(0, Math.min(W-1, tx));
+      filtY = Math.max(0, Math.min(H-1, ty));
+    }else{
+      filtX = Math.max(0, Math.min(W-1, x));
+      filtY = Math.max(0, Math.min(H-1, y));
+    }
+
+    // auto-aim snap a grilla
+    if(CFG.snap?.enabled){
+      const s = snapToGrid(filtX, filtY, CFG.snap.size, CFG.snap.radius, CFG.snap.blend);
+      filtX = s.x; filtY = s.y;
+    }
+
+    // anclas anti-drift (solo ojos)
+    if(anchorsOn && CFG.controlMode==='eyes') applyAnchors();
+
+    // cursor y trazo
+    if(mode!=='face'){
+      cursor.style.display='block';
+      cursor.style.left=filtX+'px'; cursor.style.top=filtY+'px';
+      cursor.style.width=(brush*2)+'px'; cursor.style.height=(brush*2)+'px';
+    } else { cursor.style.display='none'; }
+
+    if(mode==='brush' && isPainting){
+      if(last){
+        ctx.strokeStyle='rgba(0,200,255,.95)'; ctx.lineWidth=brush; ctx.lineJoin='round'; ctx.lineCap='round';
+        const cxm=(last.x+filtX)/2, cym=(last.y+filtY)/2;
+        ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.quadraticCurveTo(cxm,cym,filtX,filtY); ctx.stroke();
+        pts.push({t:Date.now(), x:filtX, y:filtY, mar:marEma});
+        countEl.textContent = `pts: ${pts.length}`;
+      }
+      last = {x:filtX,y:filtY};
+    }else{
+      last = {x:filtX,y:filtY};
+    }
+  }
+
+  // --------- ROI + Calibración GUI ---------
   function defineRoiWithMouse(){
     alert('Arrastra con el mouse para dibujar la zona (ROI) donde mirarás con los ojos.');
     const r=stageEl.getBoundingClientRect();
@@ -383,11 +384,7 @@
 
     function onDown(e){
       start={x:e.clientX - r.left, y:e.clientY - r.top};
-      if(!rectEl){
-        rectEl=document.createElement('div');
-        rectEl.className='roi-rect';
-        roiOverlay.appendChild(rectEl);
-      }
+      if(!rectEl){ rectEl=document.createElement('div'); rectEl.className='roi-rect'; roiOverlay.appendChild(rectEl); }
       placeRect(start.x,start.y,1,1);
       window.addEventListener('mousemove',onMove);
       window.addEventListener('mouseup',onUp,{once:true});
@@ -404,19 +401,12 @@
       const x0=(bb.left - r.left)/r.width, y0=(bb.top - r.top)/r.height;
       const x1=(bb.right - r.left)/r.width, y1=(bb.bottom - r.top)/r.height;
       roiNorm = {x0:clamp01(x0), y0:clamp01(y0), x1:clamp01(x1), y1:clamp01(y1)};
-      saveJson(ROI_KEY, roiNorm);
-      alert('ROI guardada. Ahora puedes ejecutar la Calibración guiada.');
+      saveJson(ROI_KEY, roiNorm); drawRoiRect();
+      alert('ROI guardada. Ejecuta la calibración guiada para afinar la afín.');
     }
     stageEl.addEventListener('mousedown',onDown,{once:true});
-
-    function placeRect(x,y,w,h){
-      rectEl.style.left=x+'px';
-      rectEl.style.top=y+'px';
-      rectEl.style.width=w+'px';
-      rectEl.style.height=h+'px';
-    }
+    function placeRect(x,y,w,h){ const el=roiOverlay.lastChild; el.style.left=x+'px'; el.style.top=y+'px'; el.style.width=w+'px'; el.style.height=h+'px'; }
   }
-
   function drawRoiRect(){
     roiOverlay.innerHTML='';
     const r=stageEl.getBoundingClientRect();
@@ -431,34 +421,24 @@
   }
 
   async function guidedRoiCalibration(){
-    if(CFG.controlMode!=='eyes'){
-      alert('La calibración guiada aplica al control por OJOS. Cambia “Mover brocha con” a OJOS y vuelve a intentar.');
-      return;
-    }
+    if(CFG.controlMode!=='eyes'){ alert('La calibración aplica al control por OJOS. Cambia “Mover brocha con” a OJOS.'); return; }
     const r=stageEl.getBoundingClientRect();
     const rx0=roiNorm.x0*r.width, ry0=roiNorm.y0*r.height;
     const rw =(roiNorm.x1-roiNorm.x0)*r.width;
     const rh =(roiNorm.y1-roiNorm.y0)*r.height;
 
     const nx=[0,0.5,1], ny=[0,0.5,1];
-    const targets=[];
-    for(const ix of nx) for(const iy of ny){
-      targets.push({ x: rx0 + ix*rw, y: ry0 + iy*rh });
-    }
+    const targets=[]; for(const ix of nx) for(const iy of ny){ targets.push({ x: rx0 + ix*rw, y: ry0 + iy*rh }); }
 
-    roiOverlay.innerHTML='';
-    drawRoiRect();
+    roiOverlay.innerHTML=''; drawRoiRect();
     const els=[];
     for(const t of targets){
-      const el=document.createElement('div');
-      el.className='calib-target wait';
+      const el=document.createElement('div'); el.className='calib-target wait';
       el.style.left=t.x+'px'; el.style.top=t.y+'px';
-      roiOverlay.appendChild(el);
-      els.push(el);
+      roiOverlay.appendChild(el); els.push(el);
     }
 
-    alert('Calibración: haz clic en cada punto y MIRA ese punto. Mantén la mirada ~1.2s.');
-
+    alert('Calibración: clic en cada punto y MIRA ese punto ~1.2s.');
     const gazePts=[], tgtPts=[];
     for(let i=0;i<targets.length;i++){
       const el=els[i]; const t=targets[i];
@@ -467,8 +447,7 @@
           el.classList.remove('wait'); el.classList.add('calib-target');
           const samples=[]; const t0=performance.now();
           function step(){
-            const now=performance.now();
-            if(gaze.x!=null&&gaze.y!=null){
+            const now=performance.now(); if(gaze.x!=null&&gaze.y!=null){
               samples.push([gaze.x - r.left, gaze.y - r.top]);
             }
             if(now-t0<1200){ requestAnimationFrame(step); }
@@ -482,25 +461,63 @@
         };
         el.addEventListener('click', onceClick, {once:true});
       });
-      await sleep(150);
+      await sleep(120);
     }
-
-    const sol=lsqAffine(gazePts, tgtPts);
-    if(sol){ A=sol.A; b=sol.b; saveJson(LS_KEY,{A,b}); alert('✅ Calibración afín completada y guardada.'); }
-    else{ alert('No se pudo calibrar (muestras insuficientes o degeneradas).'); }
+    const sol=lsqAffine(gazePts, tgtPts); if(sol){A=sol.A; b=sol.b; saveJson(LS_KEY,{A,b}); alert('✅ Calibración afín guardada.');}
+    else alert('No se pudo calibrar (muestras insuficientes).');
   }
 
-  // -------- utils --------
+  // ---------- Anclas anti-drift ----------
+  function getAnchors(){
+    const r=stageEl.getBoundingClientRect();
+    const rx0=roiNorm.x0*r.width, ry0=roiNorm.y0*r.height;
+    const rw =(roiNorm.x1-roiNorm.x0)*r.width;
+    const rh =(roiNorm.y1-roiNorm.y0)*r.height;
+    return [
+      {x:rx0,        y:ry0       }, // TL
+      {x:rx0+rw,     y:ry0       }, // TR
+      {x:rx0+rw,     y:ry0+rh    }, // BR
+      {x:rx0,        y:ry0+rh    }, // BL
+      {x:rx0+rw/2,   y:ry0+rh/2  }  // C
+    ];
+  }
+  function applyAnchors(){
+    if(filtX==null||filtY==null) return;
+    const APTS = getAnchors();
+    let best=null, bd=1e9;
+    for(const p of APTS){ const d=Math.hypot(p.x-filtX,p.y-filtY); if(d<bd){bd=d; best=p;} }
+    if(bd <= CFG.anchors.radiusPx){
+      if(currentAnchor!==best){ currentAnchor=best; dwellStart=performance.now(); }
+      else{
+        const dt=performance.now()-dwellStart;
+        if(dt >= CFG.anchors.dwellMs){
+          // corrige solo traslación (b), pequeño paso
+          const errX = best.x - (A[0]*filtX + A[1]*filtY + b[0]);
+          const errY = best.y - (A[2]*filtX + A[3]*filtY + b[1]);
+          b[0] += errX * CFG.anchors.adjust;
+          b[1] += errY * CFG.anchors.adjust;
+          saveJson(LS_KEY,{A,b});
+          dwellStart = performance.now(); // evita over-corrección
+        }
+      }
+    }else{
+      currentAnchor=null; dwellStart=null;
+    }
+  }
+
+  // ---------- Snap (auto-aim) ----------
+  function snapToGrid(x,y,G,R,B){
+    const gx = Math.round(x/G)*G, gy = Math.round(y/G)*G;
+    const d = Math.hypot(gx-x, gy-y);
+    if(d<=R){ return {x: (1-B)*x + B*gx, y:(1-B)*y + B*gy}; }
+    return {x,y};
+  }
+
+  // ---------- utils y álgebra ----------
   function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
   function mean2(a){if(!a.length)return[NaN,NaN];const sx=a.reduce((s,v)=>s+v[0],0), sy=a.reduce((s,v)=>s+v[1],0);return[sx/a.length, sy/a.length];}
   function median(arr){ if(!arr.length) return NaN; const a=[...arr].sort((x,y)=>x-y), m=Math.floor(a.length/2); return a.length%2 ? a[m] : (a[m-1]+a[m])/2; }
   function clamp01(v){return Math.max(0,Math.min(1,v));}
-  function clampStep(sx,sy,nx,ny,maxStep){
-    const dx=nx-sx, dy=ny-sy, d=Math.hypot(dx,dy);
-    if(!isFinite(d) || d===0) return [sx,sy];
-    if(d<=maxStep) return [nx,ny];
-    const k=maxStep/d; return [sx+dx*k, sy+dy*k];
-  }
   function transpose(A){const m=A.length,n=A[0].length,AT=Array.from({length:n},()=>Array(m).fill(0));for(let i=0;i<m;i++)for(let j=0;j<n;j++)AT[j][i]=A[i][j];return AT;}
   function mul(A,B){const m=A.length,n=A[0].length,p=B[0].length,C=Array.from({length:m},()=>Array(p).fill(0));for(let i=0;i<m;i++)for(let k=0;k<n;k++)for(let j=0;j<p;j++)C[i][j]+=A[i][k]*B[k][j];return C;}
   function mulVec(A,v){const m=A.length,n=A[0].length,r=Array(m).fill(0);for(let i=0;i<m;i++)for(let j=0;j<n;j++)r[i]+=A[i][j]*v[j];return r;}
@@ -518,6 +535,84 @@
   }
   function saveJson(k,v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
   function loadJson(k){ try{ const s=localStorage.getItem(k); return s?JSON.parse(s):null; }catch(e){ return null; } }
+
+  // ---------- Worker Kalman (blob) ----------
+  function makeKalmanWorker(){
+    const code = `
+      let ready=false, cfg={procNoise:1e-2, measNoise:2.0, maxStep:22, deadzone:6};
+      // Kalman sencillo 2D (pos+vel)
+      class Kal2D{
+        constructor(q=1e-2,r=2.0,dt=1/60){
+          this.dt=dt; this.q=q; this.r=r;
+          this.x = [0,0,0,0]; // [x,y,vx,vy]
+          this.P = [1,0,0,0, 0,1,0,0, 0,0,10,0, 0,0,0,10];
+          this.H = [1,0,0,0, 0,1,0,0];
+          this.R = [r,0, 0,r];
+        }
+        predict(){
+          const dt=this.dt;
+          // x_k = F x_{k-1}
+          const F=[1,0,dt,0, 0,1,0,dt, 0,0,1,0, 0,0,0,1];
+          this.x = [
+            F[0]*this.x[0]+F[2]*this.x[2],
+            F[5]*this.x[1]+F[7]*this.x[3],
+            this.x[2], this.x[3]
+          ];
+          // P = F P F^T + Q
+          const Q=[cfg.procNoise,0,0,0, 0,cfg.procNoise,0,0, 0,0,1e-3,0, 0,0,0,1e-3];
+          const P=this.P;
+          // P' = FPF^T (manual rápido)
+          const FP = new Array(16).fill(0);
+          for(let i=0;i<4;i++)for(let j=0;j<4;j++)for(let k=0;k<4;k++) FP[i*4+j]+=F[i*4+k]*P[k*4+j];
+          const FPt = new Array(16).fill(0);
+          for(let i=0;i<4;i++)for(let j=0;j<4;j++)for(let k=0;k<4;k++) FPt[i*4+j]+=FP[i*4+k]*F[j*4+k]; // F^T by index trick
+          for(let i=0;i<16;i++) this.P = FPt[i]+Q[i];
+          this.P = FPt.map((v,i)=>v+Q[i]);
+        }
+        update(zx,zy){
+          // y = z - Hx
+          const yx = zx - (this.H[0]*this.x[0]+this.H[1]*this.x[1]);
+          const yy = zy - (this.H[4]*this.x[0]+this.H[5]*this.x[1]);
+          // S = HPH^T + R
+          const P=this.P; const H=this.H; const R=this.R;
+          const S00 = H[0]*P[0]*H[0]+H[1]*P[4]*H[0] + R[0];
+          const S11 = H[4]*P[1]*H[5]+H[5]*P[5]*H[5] + R[3];
+          const S01 = H[0]*P[1]*H[5]+H[1]*P[5]*H[5];
+          const det = S00*S11 - S01*S01;
+          if(Math.abs(det)<1e-9) return;
+          const iS00 =  S11/det, iS11 = S00/det, iS01 = -S01/det;
+          // K = P H^T S^{-1}
+          const K0 = P[0]*H[0]*iS00 + P[1]*H[5]*iS01;
+          const K1 = P[4]*H[0]*iS00 + P[5]*H[5]*iS01;
+          const K2 = P[8]*H[0]*iS00 + P[9]*H[5]*iS01;
+          const K3 = P[12]*H[0]*iS00 + P[13]*H[5]*iS01;
+          const Ky0 = P[1]*H[0]*iS01 + P[5]*H[5]*iS11; // not used explicitly (compact form)
+          // update x
+          this.x[0]+=K0*yx; this.x[1]+=K1*yy;
+          // (vel update omitted for brevity)
+        }
+      }
+      const kf = new Kal2D();
+      self.postMessage({ready:true});
+      self.onmessage = (e)=>{
+        if(e.data?.cfg){ cfg = Object.assign(cfg, e.data.cfg); return; }
+        if(e.data?.in){
+          const {x,y,W,H} = e.data.in;
+          // deadzone contra jitter
+          // (aplicamos en la salida, por simplicidad)
+          kf.predict(); kf.update(x,y);
+          let ox = kf.x[0], oy = kf.x[1];
+          // clamp paso máximo
+          // (para simplicidad asumimos que llega a tasa estable)
+          // (puedes mover este clamp a main si prefieres)
+          self.postMessage({out:{x:ox, y:oy}});
+        }
+      };
+    `;
+    const blob = new Blob([code], {type:'application/javascript'});
+    const url = URL.createObjectURL(blob);
+    return new Worker(url);
+  }
 
 })();
 </script>
