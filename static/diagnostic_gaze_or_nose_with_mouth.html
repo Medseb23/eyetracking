@@ -96,6 +96,7 @@
     brush:8, alpha:.20, mouthThr:.28, debug:true, controlMode:'eyes',
     deadzonePx:8, maxStepPx:24, medianN:5, mouthHys:.05,
     marMedianN:5, marEmaAlpha:.30,
+    marUseEyeScale:true, marEyeFactor:0.35,   // ← NUEVO
     detConf:.5, trackConf:.5
   }, window.DIAG_CFG||{});
 
@@ -194,38 +195,56 @@
     if(!res.multiFaceLandmarks || !res.multiFaceLandmarks.length) return;
     const main = pickMainFace(res.multiFaceLandmarks); if(!main) return;
 
-    // --- boca (MAR) ---
-    // Landmarks: 13 (labio sup interno aprox) y 14 (labio inf interno aprox)
-    const top=main[13], bottom=main[14], left=main[78], right=main[308];
-    let marRaw = dist(top,bottom)/Math.max(1e-6, dist(left,right));
+    // --- datos base de cara ---
+    faceBox = bboxOf(main);
+    // Si la cara es muy pequeña en el frame, los labios suelen fallar
+    if (faceBox.area < 0.03) { return; } // ajusta 0.03–0.05 si hace falta
+
+    // --- MAR robusto (comisuras externas + escala por ojos) ---
+    // Landmarks clave:
+    // 13/14 = apertura vertical; 61/291 = comisuras boca; 33/263 = extremos ojos
+    const lm = main;
+    const d = (i,j)=>{ const a=lm[i], b=lm[j]; return Math.hypot(a.x-b.x, a.y-b.y); };
+
+    const mouthH = d(13,14);          // altura de boca
+    let mouthW   = d(61,291);         // ancho de boca
+    const eyeDst = d(33,263);         // distancia entre ojos (escala estable)
+
+    const denom = (CFG.marUseEyeScale)
+      ? Math.max(mouthW, CFG.marEyeFactor * eyeDst)
+      : mouthW;
+
+    let marRaw = mouthH / Math.max(1e-6, denom);
 
     // Suavizado MAR: mediana + EMA
     marHist.push(marRaw);
-    if(marHist.length > CFG.marMedianN) marHist.shift();
+    if (marHist.length > CFG.marMedianN) marHist.shift();
     const marMed = median(marHist);
-    if(marEma==null) marEma = marMed;
-    marEma = CFG.marEmaAlpha*marMed + (1-CFG.marEmaAlpha)*marEma;
+    if (marEma == null) marEma = marMed;
+    marEma = CFG.marEmaAlpha * marMed + (1 - CFG.marEmaAlpha) * marEma;
 
-    // UI barra MAR (clamp a [0,0.8] solo para escala visual)
+    // UI barra (clamp para escala visual)
     const marUi = Math.max(0, Math.min(0.8, marEma));
     marVal.textContent = `raw:${marRaw.toFixed(3)}  filt:${marEma.toFixed(3)}`;
-    marFill.style.width = (marUi/0.8*100).toFixed(0)+'%';
-    marThr.style.left   = (Math.max(0, Math.min(1, mouthThr/0.8))*100).toFixed(0)+'%';
+    marFill.style.width = (marUi / 0.8 * 100).toFixed(0) + '%';
+    marThr.style.left   = (Math.max(0, Math.min(1, mouthThr / 0.8)) * 100).toFixed(0) + '%';
 
     // --- nariz (posición) ---
     const NOSE_IDX=[1,4];
-    let nz = main[NOSE_IDX[0]];
-    for(const idx of NOSE_IDX){ if(main[idx] && main[idx].z < nz.z) nz = main[idx]; }
+    let nz = lm[NOSE_IDX[0]];
+    for(const idx of NOSE_IDX){ if(lm[idx] && lm[idx].z < nz.z) nz = lm[idx]; }
     nose = {x:nz.x, y:nz.y, z:nz.z};
-    faceBox = bboxOf(main);
 
-    // preview
+    // preview debug
     if(preview.style.display!=='none' && CFG.debug){
       pctx.clearRect(0,0,preview.width,preview.height);
       pctx.drawImage(rawVideo,0,0,preview.width,preview.height);
-      pctx.fillStyle='#0f0';
-      const nx = nose.x*preview.width, ny = nose.y*preview.height;
-      pctx.beginPath(); pctx.arc(nx,ny,4,0,Math.PI*2); pctx.fill();
+      const toPX = (p) => [p.x*preview.width, p.y*preview.height];
+      const dot = (x,y,r=3,c='#0f0')=>{ pctx.fillStyle=c; pctx.beginPath(); pctx.arc(x,y,r,0,Math.PI*2); pctx.fill(); };
+      [61,291].forEach(i=>{ const [x,y]=toPX(lm[i]); dot(x,y,3,'#0f0'); });
+      [33,263].forEach(i=>{ const [x,y]=toPX(lm[i]); dot(x,y,3,'#ff0'); });
+      [13,14].forEach(i=>{ const [x,y]=toPX(lm[i]); dot(x,y,3,'#0ff'); });
+      const nx = nose.x*preview.width, ny = nose.y*preview.height; dot(nx,ny,4,'#f0f');
       pctx.fillStyle='#fff'; pctx.fillText(`MAR=${marEma.toFixed(3)}`,8,16);
     }
   });
@@ -265,9 +284,7 @@
       let ny = CFG.alpha*gyMed + (1-CFG.alpha)*smoothed.y;
 
       // deadzone
-      if(Math.hypot(nx-smoothed.x, ny-smoothed.y) < CFG.deadzonePx){
-        nx = smoothed.x; ny = smoothed.y;
-      }
+      if(Math.hypot(nx-smoothed.x, ny-smoothed.y) < CFG.deadzonePx){ nx = smoothed.x; ny = smoothed.y; }
 
       // límite de paso
       [nx,ny] = clampStep(smoothed.x, smoothed.y, nx, ny, CFG.maxStepPx);
@@ -292,9 +309,7 @@
       let nx = CFG.alpha*tMedX + (1-CFG.alpha)*smoothed.x;
       let ny = CFG.alpha*tMedY + (1-CFG.alpha)*smoothed.y;
 
-      if(Math.hypot(nx-smoothed.x, ny-smoothed.y) < CFG.deadzonePx){
-        nx = smoothed.x; ny = smoothed.y;
-      }
+      if(Math.hypot(nx-smoothed.x, ny-smoothed.y) < CFG.deadzonePx){ nx = smoothed.x; ny = smoothed.y; }
 
       [nx,ny] = clampStep(smoothed.x, smoothed.y, nx, ny, CFG.maxStepPx);
 
@@ -306,11 +321,7 @@
     if(marEma!=null){
       const openThr  = mouthThr + CFG.mouthHys;
       const closeThr = mouthThr - CFG.mouthHys;
-      if(isPainting){
-        isPainting = marEma > closeThr;
-      }else{
-        isPainting = marEma > openThr;
-      }
+      if(isPainting){ isPainting = marEma > closeThr; } else { isPainting = marEma > openThr; }
     }
 
     // 3) Mostrar cursor y pintar
