@@ -96,8 +96,9 @@
     brush:8, alpha:.20, mouthThr:.28, debug:true, controlMode:'eyes',
     deadzonePx:8, maxStepPx:24, medianN:5, mouthHys:.05,
     marMedianN:5, marEmaAlpha:.30,
-    marUseEyeScale:true, marEyeFactor:0.35,   // ← NUEVO
-    detConf:.5, trackConf:.5
+    marUseEyeScale:true, marEyeFactor:0.35,
+    detConf:.5, trackConf:.5,
+    snap: { enabled:true, size:64, radius:22, blend:0.7 } // auto-aim a grilla
   }, window.DIAG_CFG||{});
 
   // -------- DOM --------
@@ -155,7 +156,14 @@
   document.getElementById('togglePreview').onclick=()=>{preview.style.display=(preview.style.display==='none'||preview.style.display==='')?'block':'none';};
   document.getElementById('clear').onclick=()=>{ctx.clearRect(0,0,canvas.width,canvas.height); pts=[]; countEl.textContent='pts: 0'; last=null; smoothed=null;};
   document.getElementById('savePng').onclick=()=>{const a=document.createElement('a'); a.download=`brocha_${Date.now()}.png`; a.href=canvas.toDataURL('image/png'); a.click();};
-  document.getElementById('saveCsv').onclick=()=>{const header='t_ms,x,y,mar,mode\n'; const body=pts.map(p=>`${p.t},${Math.round(p.x)},${Math.round(p.y)},${(p.mar??0).toFixed(4)},${CFG.controlMode}`).join('\n'); const blob=new Blob([header+body],{type:'text/csv'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`brocha_${CFG.controlMode}_${Date.now()}.csv`; a.click(); URL.revokeObjectURL(url);};
+  document.getElementById('saveCsv').onclick=()=>{
+    const header='t_ms,x,y,mar,mode\n';
+    const body=pts.map(p=>`${p.t},${Math.round(p.x)},${Math.round(p.y)},${(p.mar??0).toFixed(4)},${CFG.controlMode}`).join('\n');
+    const blob=new Blob([header+body],{type:'text/csv'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download=`brocha_${CFG.controlMode}_${Date.now()}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  };
 
   document.getElementById('btnRoi').onclick = defineRoiWithMouse;
   document.getElementById('btnCalRoi').onclick = guidedRoiCalibration;
@@ -197,23 +205,17 @@
 
     // --- datos base de cara ---
     faceBox = bboxOf(main);
-    // Si la cara es muy pequeña en el frame, los labios suelen fallar
-    if (faceBox.area < 0.03) { return; } // ajusta 0.03–0.05 si hace falta
+    if (faceBox.area < 0.03) { return; } // cara muy lejos → labios fallan
 
-    // --- MAR robusto (comisuras externas + escala por ojos) ---
-    // Landmarks clave:
-    // 13/14 = apertura vertical; 61/291 = comisuras boca; 33/263 = extremos ojos
+    // --- MAR robusto (boca) ---
     const lm = main;
     const d = (i,j)=>{ const a=lm[i], b=lm[j]; return Math.hypot(a.x-b.x, a.y-b.y); };
 
-    const mouthH = d(13,14);          // altura de boca
-    let mouthW   = d(61,291);         // ancho de boca
-    const eyeDst = d(33,263);         // distancia entre ojos (escala estable)
+    const mouthH = d(13,14);        // altura de boca
+    const mouthW = d(61,291);       // ancho de boca
+    const eyeDst = d(33,263);       // distancia ojos
 
-    const denom = (CFG.marUseEyeScale)
-      ? Math.max(mouthW, CFG.marEyeFactor * eyeDst)
-      : mouthW;
-
+    const denom = (CFG.marUseEyeScale) ? Math.max(mouthW, CFG.marEyeFactor * eyeDst) : mouthW;
     let marRaw = mouthH / Math.max(1e-6, denom);
 
     // Suavizado MAR: mediana + EMA
@@ -223,7 +225,7 @@
     if (marEma == null) marEma = marMed;
     marEma = CFG.marEmaAlpha * marMed + (1 - CFG.marEmaAlpha) * marEma;
 
-    // UI barra (clamp para escala visual)
+    // UI barra
     const marUi = Math.max(0, Math.min(0.8, marEma));
     marVal.textContent = `raw:${marRaw.toFixed(3)}  filt:${marEma.toFixed(3)}`;
     marFill.style.width = (marUi / 0.8 * 100).toFixed(0) + '%';
@@ -263,6 +265,18 @@
 
   // -------- Cargar calibración previa --------
   const saved = loadJson(LS_KEY); if(saved && saved.A && saved.b){ A=saved.A; b=saved.b; }
+
+  // -------- auto-aim: snap a grilla --------
+  function snapToGrid(x,y){
+    if(!CFG.snap?.enabled) return {x,y,snapped:false};
+    const G = CFG.snap.size, R = CFG.snap.radius, B = CFG.snap.blend;
+    const gx = Math.round(x/G)*G, gy = Math.round(y/G)*G;
+    const d = Math.hypot(gx-x, gy-y);
+    if(d<=R){
+      return { x: (1-B)*x + B*gx, y:(1-B)*y + B*gy, snapped:true };
+    }
+    return {x,y,snapped:false};
+  }
 
   // -------- bucle principal --------
   function loop(){
@@ -317,6 +331,12 @@
       cx = nx; cy = ny;
     }
 
+    // auto-aim (snap) opcional
+    if(cx!=null && cy!=null){
+      const s = snapToGrid(cx, cy);
+      cx = s.x; cy = s.y;
+    }
+
     // 2) Histeresis de boca
     if(marEma!=null){
       const openThr  = mouthThr + CFG.mouthHys;
@@ -338,7 +358,9 @@
       if(mode==='brush' && isPainting){
         if(last){
           ctx.strokeStyle='rgba(0,200,255,.95)'; ctx.lineWidth=brush; ctx.lineJoin='round'; ctx.lineCap='round';
-          ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(x,y); ctx.stroke();
+          // trazo suavizado (bezier simple)
+          const cxm = (last.x + x)/2, cym = (last.y + y)/2;
+          ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.quadraticCurveTo(cxm,cym,x,y); ctx.stroke();
           pts.push({t:Date.now(), x, y, mar:marEma});
           countEl.textContent = `pts: ${pts.length}`;
         }
