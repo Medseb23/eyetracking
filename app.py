@@ -8,15 +8,14 @@ st.title("🧪 Diagnóstico paso a paso: Boca → Mirada → Brocha")
 st.markdown(
     """
 **Flujo recomendado**  
-1) **Test de Boca**: verifica que el detector (MAR) cambie al abrir/cerrar la boca.  
-2) **Test de Mirada**: comprueba que el cursor siga tus ojos y (opcional) calibra.  
-3) **Brocha**: usa la mirada para mover el pincel y la boca (MAR>umbral) para dibujar.
+1) **Probar cámara** (botón) y **Test de Boca**: revisa que el MAR suba al abrir la boca.  
+2) **Test de Mirada**: el cursor debe seguir tus ojos; calibra si está corrido.  
+3) **Brocha**: mirada mueve el pincel y boca abierta dibuja.
 
 > Recomendado en **PC/notebook** con buena iluminación frontal y cabeza lo más estable posible.
     """
 )
 
-# Panel de controles básico
 c1, c2, c3, c4 = st.columns(4)
 with c1:
     brush = st.slider("Tamaño de brocha", 2, 40, 8, 1)
@@ -27,11 +26,9 @@ with c3:
 with c4:
     debug = st.toggle("Depuración (preview/landmarks)", value=True)
 
-# Cargar HTML
-html_path = Path(__file__).parent / "static" / "diagnostic_gaze_brush.html"
+html_path = Path(__file__).parent / "static" / "diagnostic_gaze_brush_getusermedia.html"
 html = html_path.read_text(encoding="utf-8")
 
-# Config inicial inyectada
 cfg = f"""
 <script>
 window.DIAG_CFG = {{
