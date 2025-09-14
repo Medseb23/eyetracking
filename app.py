@@ -2,21 +2,22 @@ import streamlit as st
 import streamlit.components.v1 as components
 from pathlib import Path
 
-st.set_page_config(page_title="Diagnóstico Boca + Mirada + Brocha", page_icon="🧪", layout="wide")
-st.title("🧪 Diagnóstico paso a paso: Boca → Mirada → Brocha")
+st.set_page_config(page_title="Diagnóstico Boca/Mirada/Brocha", page_icon="🧪", layout="wide")
+st.title("🧪 Diagnóstico: Mirada + Gatillo (Boca o Nariz) → Brocha")
 
 st.markdown(
     """
-**Flujo recomendado**  
-1) **Probar cámara** (botón) y **Test de Boca**: revisa que el MAR suba al abrir la boca.  
-2) **Test de Mirada**: el cursor debe seguir tus ojos; calibra si está corrido.  
-3) **Brocha**: mirada mueve el pincel y boca abierta dibuja.
+Elige el **gatillo** que activará el dibujo.
+- **Boca**: dibuja con **boca abierta** (MAR > umbral).
+- **Nariz**: dibuja al **acercar la nariz** a la cámara (profundidad Z cruza umbral).
 
-> Recomendado en **PC/notebook** con buena iluminación frontal y cabeza lo más estable posible.
+Consejos: buena iluminación, cabeza estable, calibrar primero.
     """
 )
 
-c1, c2, c3, c4 = st.columns(4)
+c0, c1, c2, c3, c4 = st.columns(5)
+with c0:
+    trigger = st.selectbox("Gatillo", ["Boca", "Nariz"], index=0)
 with c1:
     brush = st.slider("Tamaño de brocha", 2, 40, 8, 1)
 with c2:
@@ -26,7 +27,11 @@ with c3:
 with c4:
     debug = st.toggle("Depuración (preview/landmarks)", value=True)
 
-html_path = Path(__file__).parent / "static" / "diagnostic_gaze_brush_getusermedia.html"
+# el HTML depende del gatillo elegido
+html_file = "diagnostic_gaze_brush_getusermedia.html" if trigger == "Boca" \
+            else "diagnostic_gaze_brush_nose.html"
+
+html_path = Path(__file__).parent / "static" / html_file
 html = html_path.read_text(encoding="utf-8")
 
 cfg = f"""
