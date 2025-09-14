@@ -3,127 +3,201 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Gaze Brush Calibrated</title>
-<!-- WebGazer -->
+<title>Diagnóstico Boca + Mirada + Brocha</title>
+
+<!-- WebGazer (mirada) -->
 <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
-<!-- MediaPipe FaceMesh -->
+
+<!-- MediaPipe FaceMesh (boca) -->
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+
 <style>
-  html, body { margin:0; padding:0; height:100%; overflow:hidden; background:#101114; color:#fff; }
+  html, body { margin:0; padding:0; height:100%; overflow:hidden; background:#0f1115; color:#fff; }
   #wrap { position:relative; width:100%; height:100vh; }
-  #canvas { position:absolute; inset:0; width:100%; height:100%; background:#0f1115; }
-  #cursor { position:absolute; width:20px; height:20px; border-radius:50%; pointer-events:none;
-            border:2px solid rgba(255,255,255,.9); transform:translate(-50%,-50%); }
-  #hud { position:absolute; top:10px; left:10px; right:10px; display:flex; gap:8px; flex-wrap:wrap;
-         background:rgba(0,0,0,.45); padding:8px 10px; border-radius:10px; align-items:center; }
+  #topbar { position:absolute; top:10px; left:10px; right:10px; display:flex; gap:8px; flex-wrap:wrap;
+            background:rgba(0,0,0,.45); padding:8px 10px; border-radius:10px; align-items:center; }
   .btn { appearance:none; border:0; padding:6px 10px; border-radius:10px; cursor:pointer;
          background:#22272e; color:#fff; font-weight:600; }
   .btn.primary { background:#00e676; color:#111; }
   .btn.warn { background:#ff5252; }
   .sp { margin-left:auto; font:12px/1.2 monospace; opacity:.9; }
-  #dbg { position:absolute; bottom:54px; left:10px; font:12px/1.3 monospace; opacity:.9; }
-  #webgazerVideoContainer { display:none !important; }
-  #landmarks { position:absolute; top:10px; right:10px; width:280px; height:210px; background:#0008; display:none; border-radius:8px; }
-  #calibDot { position:fixed; width:18px; height:18px; border-radius:50%; background:#ffcc00; border:2px solid #222;
-              display:none; box-shadow:0 0 0 6px rgba(255,204,0,.25); transform:translate(-50%,-50%); z-index:9999; }
-  #calibMsg { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
-              background:rgba(0,0,0,.75); color:#fff; padding:10px 14px; border-radius:10px;
-              font:14px/1.3 ui-sans-serif, system-ui; display:none; z-index:9999; }
-  /* Panel MAR */
-  #marPanel{ position:absolute; bottom:10px; left:10px; right:10px; display:flex; gap:10px; align-items:center;
-             background:rgba(0,0,0,.55); color:#fff; padding:6px 10px; border-radius:10px; font:12px/1.3 ui-sans-serif, system-ui; }
-  #marBar{ position:relative; height:10px; flex:1; background:#333; border-radius:6px; overflow:hidden; }
+
+  /* Zona central */
+  #stage { position:absolute; inset:62px 10px 10px 10px; border-radius:10px; background:#10131a; overflow:hidden; }
+  #canvas { position:absolute; inset:0; width:100%; height:100%; }
+  #cursor { position:absolute; width:20px; height:20px; border:2px solid rgba(255,255,255,.95); border-radius:50%;
+            pointer-events:none; transform:translate(-50%,-50%); display:none; }
+
+  /* Panel de estado y MAR */
+  #status { position:absolute; bottom:10px; left:10px; right:10px; display:flex; gap:10px; align-items:center;
+            background:rgba(255,255,255,.06); padding:8px 10px; border-radius:10px; }
+  #modeTag { font-weight:700; background:#1f2937; padding:4px 8px; border-radius:8px; }
+  #marPanel{ display:flex; align-items:center; gap:8px; flex:1; }
+  #marBar{ position:relative; height:10px; flex:1; background:#2b2f3a; border-radius:6px; overflow:hidden; }
   #marFill{ position:absolute; top:0; left:0; height:100%; width:0%; background:#00e676; }
   #marThr{ position:absolute; top:-3px; width:2px; height:16px; background:#ff5252; left:50%; }
+  #marVal { min-width:72px; text-align:right; font:12px/1 monospace; opacity:.9; }
+
+  /* Previews */
+  #preview { position:absolute; top:10px; right:10px; width:300px; height:225px; background:#000a; border-radius:8px; display:none; }
+  #webgazerVideoContainer { display:none !important; } /* ocultar overlay de WebGazer */
+  video#inputVideo { display:none; } /* video crudo de MediaPipe */
 </style>
 </head>
 <body>
 <div id="wrap">
-  <canvas id="canvas"></canvas>
-  <div id="cursor"></div>
-
-  <div id="hud">
-    <button id="start" class="btn primary">▶️ Iniciar</button>
-    <button id="stop" class="btn">⏸️ Pausar</button>
-    <button id="clear" class="btn warn">🧹 Limpiar</button>
-    <button id="savePng" class="btn">🖼️ PNG</button>
-    <button id="saveCsv" class="btn">📄 CSV</button>
+  <!-- Barra superior (modos y acciones) -->
+  <div id="topbar">
+    <button id="modeFace" class="btn">1) Test de Boca</button>
+    <button id="modeGaze" class="btn">2) Test de Mirada</button>
+    <button id="modeBrush" class="btn primary">3) Iniciar Brocha</button>
     <button id="calGaze" class="btn">🎯 Calibrar mirada</button>
     <button id="calMouth" class="btn">👄 Calibrar boca</button>
     <button id="togglePreview" class="btn">👁️ Preview</button>
-    <span class="sp" id="stat">—</span>
+    <button id="clear" class="btn warn">🧹 Limpiar</button>
+    <button id="savePng" class="btn">🖼️ PNG</button>
+    <button id="saveCsv" class="btn">📄 CSV</button>
+    <span class="sp" id="count">pts: 0</span>
   </div>
 
-  <div id="dbg">mirada: x=– y=– | MAR=– | umbral=– | dibujando: no</div>
-  <canvas id="landmarks"></canvas>
-  <div id="calibDot"></div>
-  <div id="calibMsg"></div>
+  <!-- Escenario -->
+  <div id="stage">
+    <canvas id="canvas"></canvas>
+    <div id="cursor"></div>
+    <canvas id="preview"></canvas>
+  </div>
 
-  <div id="marPanel">
-    <span>MAR:</span>
-    <div id="marBar">
-      <div id="marFill"></div>
-      <div id="marThr"></div>
+  <!-- Estado inferior -->
+  <div id="status">
+    <span id="modeTag">Modo: —</span>
+    <div id="marPanel">
+      <span>MAR:</span>
+      <div id="marBar"><div id="marFill"></div><div id="marThr"></div></div>
+      <span id="marVal">—</span>
     </div>
-    <span id="marVal">–</span>
   </div>
 </div>
 
 <script>
 (function(){
-  const cfg = window.GAZE_CFG || {brush: 8, alpha: .45, mouthThr: .28, debug: false};
+  const cfg = window.DIAG_CFG || { brush:8, alpha:.45, mouthThr:.28, debug:true };
 
-  // DOM refs
+  // DOM
   const canvas = document.getElementById('canvas');
   const ctx = canvas.getContext('2d');
   const cursor = document.getElementById('cursor');
-  const stat = document.getElementById('stat');
-  const dbg = document.getElementById('dbg');
-  const lmCanvas = document.getElementById('landmarks');
-  const lmCtx = lmCanvas.getContext('2d');
-  lmCanvas.style.display = cfg.debug ? 'block' : 'none';
+  const preview = document.getElementById('preview');
+  const pctx = preview.getContext('2d');
 
-  const startBtn = document.getElementById('start');
-  const stopBtn  = document.getElementById('stop');
-  const clearBtn = document.getElementById('clear');
-  const savePng  = document.getElementById('savePng');
-  const saveCsv  = document.getElementById('saveCsv');
-  const calGaze  = document.getElementById('calGaze');
-  const calMouth = document.getElementById('calMouth');
-  const togglePreview = document.getElementById('togglePreview');
+  const modeFaceBtn = document.getElementById('modeFace');
+  const modeGazeBtn = document.getElementById('modeGaze');
+  const modeBrushBtn= document.getElementById('modeBrush');
 
-  const calibDot = document.getElementById('calibDot');
-  const calibMsg = document.getElementById('calibMsg');
+  const calGazeBtn = document.getElementById('calGaze');
+  const calMouthBtn= document.getElementById('calMouth');
+  const togglePrev = document.getElementById('togglePreview');
+
+  const clearBtn   = document.getElementById('clear');
+  const savePngBtn = document.getElementById('savePng');
+  const saveCsvBtn = document.getElementById('saveCsv');
+
+  const countEl = document.getElementById('count');
+  const modeTag = document.getElementById('modeTag');
 
   const marBar = document.getElementById('marBar');
-  const marFill = document.getElementById('marFill');
+  const marFill= document.getElementById('marFill');
   const marThr = document.getElementById('marThr');
   const marVal = document.getElementById('marVal');
 
   // State
   let W=0,H=0,dpr=1;
-  let running=false, drawing=false;
+  let mode = 'face'; // 'face' | 'gaze' | 'brush'
+  let running = true;
+  let drawing = false;
   let brush = cfg.brush;
   let alpha = cfg.alpha;
-  let smoothed=null, last=null;
-  let points=[];
   let mouthThr = cfg.mouthThr;
-  let marDbg = 0;
+  let smoothed=null, last=null;
+  let pts=[];
 
-  // Gaze affine calibration parameters
-  let A = [1,0,0,1], b = [0,0];
+  // Afín de mirada
+  let A=[1,0,0,1], b=[0,0];
 
   function resize(){
-    dpr = Math.min(window.devicePixelRatio || 1, 2);
-    W = canvas.clientWidth; H = canvas.clientHeight;
-    canvas.width = Math.floor(W*dpr); canvas.height=Math.floor(H*dpr);
+    dpr = Math.min(window.devicePixelRatio||1, 2);
+    const r = document.getElementById('stage').getBoundingClientRect();
+    canvas.width = Math.floor(r.width*dpr);
+    canvas.height= Math.floor(r.height*dpr);
+    canvas.style.width = r.width+'px';
+    canvas.style.height= r.height+'px';
     ctx.setTransform(dpr,0,0,dpr,0,0);
-  }
-  window.addEventListener('resize', resize); resize();
 
-  // ===== WebGazer (gaze) =====
+    preview.width = Math.floor(300*dpr);
+    preview.height= Math.floor(225*dpr);
+    preview.style.width = '300px';
+    preview.style.height= '225px';
+    pctx.setTransform(dpr,0,0,dpr,0,0);
+
+    W = r.width; H = r.height;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ====== MediaPipe FaceMesh (boca) ======
+  const video = document.createElement('video'); // oculto
+  const faceMesh = new FaceMesh.FaceMesh({
+    locateFile: (f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`
+  });
+  faceMesh.setOptions({
+    maxNumFaces: 1, refineLandmarks: true,
+    minDetectionConfidence: .5, minTrackingConfidence: .5
+  });
+  function dist(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
+
+  let mar = 0, marDbg = 0;
+  faceMesh.onResults(res=>{
+    if(!res.multiFaceLandmarks || !res.multiFaceLandmarks.length) return;
+    const lm = res.multiFaceLandmarks[0];
+    const top=lm[13], bottom=lm[14], left=lm[78], right=lm[308];
+    mar = dist(top,bottom)/Math.max(1e-6, dist(left,right));
+    marDbg = mar;
+
+    // Feedback MAR siempre activo
+    marVal.textContent = mar.toFixed(3);
+    marFill.style.width = (Math.max(0, Math.min(1, mar/0.8))*100).toFixed(0)+'%';
+    marThr.style.left   = (Math.max(0, Math.min(1, mouthThr/0.8))*100).toFixed(0)+'%';
+
+    // Preview (si visible)
+    if(preview.style.display !== 'none'){
+      pctx.clearRect(0,0,preview.width,preview.height);
+      const src = res.image || video;
+      // nota: preview es 300x225 CSS; ya escalado por dpr
+      pctx.drawImage(src, 0, 0, preview.width/dpr, preview.height/dpr);
+      // landmarks principales
+      pctx.fillStyle = '#0f0'; pctx.strokeStyle='#0f0'; pctx.lineWidth=1;
+      function P(p){ return [p.x*(preview.width/dpr), p.y*(preview.height/dpr)]; }
+      const ptsL = [top,bottom,left,right].map(P);
+      for(const p of ptsL){ pctx.beginPath(); pctx.arc(p[0],p[1],3,0,Math.PI*2); pctx.fill(); }
+      pctx.beginPath(); pctx.moveTo(...ptsL[0]); pctx.lineTo(...ptsL[1]); pctx.stroke();
+      pctx.beginPath(); pctx.moveTo(...ptsL[2]); pctx.lineTo(...ptsL[3]); pctx.stroke();
+      pctx.fillStyle='#fff'; pctx.fillText(`MAR=${mar.toFixed(3)} thr=${mouthThr.toFixed(2)}`, 8, 14);
+    }
+  });
+
+  // Cámara reducida para CPU
+  let frameCount = 0;
+  const camera = new Camera.Camera(video, {
+    onFrame: async () => {
+      frameCount = (frameCount + 1) || 1;
+      if (frameCount % 3 === 0) await faceMesh.send({image: video}); // ~10–15 fps
+    },
+    width: 320, height: 240,
+  });
+  camera.start();
+
+  // ====== WebGazer (mirada) ======
   window.saveDataAcrossSessions = true;
   webgazer.setRegression('ridge').setTracker('TFFacemesh').begin()
     .showVideoPreview(false).showPredictionPoints(false).showFaceFeedbackBox(false);
@@ -134,59 +208,14 @@
     gaze.x = data.x; gaze.y = data.y;
   });
 
-  // ===== MediaPipe FaceMesh (MAR) =====
-  const video = document.createElement('video'); // oculto
-  const faceMesh = new FaceMesh.FaceMesh({
-    locateFile: (f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`
-  });
-  faceMesh.setOptions({maxNumFaces:1, refineLandmarks:true, minDetectionConfidence:.5, minTrackingConfidence:.5});
-  function dist(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
+  // ====== Drawing loop ======
+  function loop(){
+    if(!running){ requestAnimationFrame(loop); return; }
 
-  let mar = 0;
-  faceMesh.onResults(res=>{
-    if(!res.multiFaceLandmarks || !res.multiFaceLandmarks.length) return;
-    const lm = res.multiFaceLandmarks[0];
-    const top=lm[13], bottom=lm[14], left=lm[78], right=lm[308];
-    mar = dist(top,bottom)/Math.max(1e-6, dist(left,right));
-    marDbg = mar;
-    drawing = mar > mouthThr;
+    // limpiar nada: queremos persistir trazos en modo brocha
+    // pero sí podemos actualizar cursor y estados
 
-    // feedback MAR
-    marVal.textContent = mar.toFixed(3);
-    const pct = Math.max(0, Math.min(100, (mar/0.8)*100)); // escala tosca 0–0.8
-    marFill.style.width = pct + '%';
-    const thrPct = Math.max(0, Math.min(100, (mouthThr/0.8)*100));
-    marThr.style.left = thrPct + '%';
-
-    // preview si visible
-    if(lmCanvas.style.display !== 'none'){
-      const w=lmCanvas.width, h=lmCanvas.height;
-      const src = res.image || video;
-      lmCtx.drawImage(src, 0, 0, w, h);
-      lmCtx.fillStyle="#0f0"; lmCtx.strokeStyle="#0f0"; lmCtx.lineWidth=1;
-      function P(p){ return [p.x*w,p.y*h]; }
-      const pts=[top,bottom,left,right].map(P);
-      for(const p of pts){ lmCtx.beginPath(); lmCtx.arc(p[0],p[1],3,0,Math.PI*2); lmCtx.fill(); }
-      lmCtx.beginPath(); lmCtx.moveTo(...pts[0]); lmCtx.lineTo(...pts[1]); lmCtx.stroke();
-      lmCtx.beginPath(); lmCtx.moveTo(...pts[2]); lmCtx.lineTo(...pts[3]); lmCtx.stroke();
-      lmCtx.fillStyle="#fff"; lmCtx.fillText(`MAR=${mar.toFixed(3)} thr=${mouthThr.toFixed(2)}`,8,14);
-    }
-  });
-
-  // Cámara reducida para ahorrar CPU
-  let frameCount = 0;
-  const camera = new Camera.Camera(video, {
-    onFrame: async () => {
-      frameCount = (frameCount + 1) || 1;
-      if (frameCount % 3 === 0) await faceMesh.send({image: video}); // ~10–15 fps
-    },
-    width: 320, height: 240
-  });
-  camera.start();
-
-  // ===== Dibujo =====
-  function step(){
-    if(running && gaze.x!=null && gaze.y!=null){
+    if(gaze.x!=null && gaze.y!=null){
       if(!smoothed) smoothed = {x:gaze.x, y:gaze.y};
       smoothed.x = alpha*gaze.x + (1-alpha)*smoothed.x;
       smoothed.y = alpha*gaze.y + (1-alpha)*smoothed.y;
@@ -196,104 +225,165 @@
       const x = Math.max(0, Math.min(W-1, tx));
       const y = Math.max(0, Math.min(H-1, ty));
 
-      // cursor
-      cursor.style.left = x+'px'; cursor.style.top = y+'px';
-      cursor.style.width = (brush*2)+'px'; cursor.style.height = (brush*2)+'px';
+      // Mostrar cursor según modo
+      if(mode==='gaze' || mode==='brush'){
+        cursor.style.display = 'block';
+        cursor.style.left = x+'px';
+        cursor.style.top  = y+'px';
+        cursor.style.width = (brush*2)+'px';
+        cursor.style.height= (brush*2)+'px';
+      } else {
+        cursor.style.display = 'none';
+      }
 
-      if(drawing && last){
-        ctx.strokeStyle = 'rgba(0,200,255,.95)';
-        ctx.lineWidth = brush; ctx.lineJoin='round'; ctx.lineCap='round';
-        ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(x,y); ctx.stroke();
+      // Dibujo solo en modo brocha Y con boca abierta
+      const mouthOpen = marDbg > mouthThr;
+      if(mode==='brush' && mouthOpen){
+        if(last){
+          ctx.strokeStyle='rgba(0,200,255,.95)';
+          ctx.lineWidth=brush; ctx.lineJoin='round'; ctx.lineCap='round';
+          ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(x,y); ctx.stroke();
+          pts.push({t:Date.now(), x, y, mar:marDbg, drawing:1});
+          countEl.textContent = `pts: ${pts.length}`;
+        }
       }
       last = {x,y};
-      points.push({t:Date.now(), x, y, mar:marDbg, drawing:drawing?1:0});
-      stat.textContent = `pts: ${points.length}`;
     }
-    dbg.textContent = `mirada: x=${gaze.x?gaze.x.toFixed(0):'–'} y=${gaze.y?gaze.y.toFixed(0):'–'} | MAR=${marDbg?marDbg.toFixed(3):'–'} | umbral=${mouthThr?mouthThr.toFixed(2):'–'} | dibujando: ${drawing?'sí':'no'}`;
-    requestAnimationFrame(step);
+
+    requestAnimationFrame(loop);
   }
-  requestAnimationFrame(step);
+  requestAnimationFrame(loop);
 
-  // ===== UI =====
-  startBtn.onclick = ()=>{ running=true; };
-  stopBtn.onclick  = ()=>{ running=false; last=null; };
-  clearBtn.onclick = ()=>{ running=false; last=null; smoothed=null; points=[]; ctx.clearRect(0,0,canvas.width,canvas.height); };
-  savePng.onclick  = ()=>{ const a=document.createElement('a'); a.download=`gaze_${Date.now()}.png`; a.href=canvas.toDataURL('image/png'); a.click(); };
-  saveCsv.onclick  = ()=>{
-    const header='t_ms,x,y,mar,drawing\n';
-    const body=points.map(p=>`${p.t},${Math.round(p.x)},${Math.round(p.y)},${p.mar.toFixed(4)},${p.drawing}`).join('\n');
-    const blob=new Blob([header+body],{type:'text/csv'}); const url=URL.createObjectURL(blob);
-    const a=document.createElement('a'); a.href=url; a.download=`gaze_${Date.now()}.csv`; a.click(); URL.revokeObjectURL(url);
-  };
-  togglePreview.onclick = ()=>{ lmCanvas.style.display = (lmCanvas.style.display==='none'||lmCanvas.style.display==='') ? 'block':'none'; };
+  // ====== Modos ======
+  function setMode(m){
+    mode = m;
+    modeTag.textContent = `Modo: ${m==='face' ? 'Test de Boca' : m==='gaze' ? 'Test de Mirada' : 'Brocha'}`;
+    if(m==='face'){
+      // solo estado/preview de boca; sin cursor ni dibujo
+      cursor.style.display='none';
+    }
+    // en 'gaze': solo cursor movido por ojos (sin trazo)
+    // en 'brush': cursor + trazo cuando boca abierta
+  }
+  setMode('face');
 
-  // ===== Calibración mirada =====
-  calGaze.onclick = async ()=>{
-    running=false; last=null; smoothed=null;
-    let gazePts=[], tgtPts=[];
-    calibMsg.textContent='Mira el punto ~1.6 s cada vez'; calibMsg.style.display='block';
+  modeFaceBtn.onclick = ()=> setMode('face');
+  modeGazeBtn.onclick = ()=> setMode('gaze');
+  modeBrushBtn.onclick= ()=> setMode('brush');
+
+  // ====== Calibración mirada (4 esquinas + centro) ======
+  calGazeBtn.onclick = async ()=>{
     const targets = [[0.08,0.08],[0.92,0.08],[0.92,0.92],[0.08,0.92],[0.50,0.50]];
+    let gazePts=[], tgtPts=[];
+    alert('Calibración: mira cada esquina y el centro cuando aparezca el cursor (2 s por punto).');
+
+    // usamos el propio cursor como feedback; recogemos medias en cada objetivo
     for(const [nx,ny] of targets){
-      await showDotAt(nx,ny,1600);
-      const {Wv,Hv}=viewportWH();
-      const tx=nx*Wv, ty=ny*Hv;
-      const samples=[]; await sampleFor(1200, g=>samples.push(g));
-      const [gx,gy]=mean2(samples);
+      // objetivo en coords de viewport (no canvas)
+      const r = document.getElementById('stage').getBoundingClientRect();
+      const tx = nx * r.width;
+      const ty = ny * r.height;
+
+      // recolectar muestras ~1.6s
+      const samples=[];
+      const t0 = performance.now();
+      await new Promise(res=>{
+        function loop2(){
+          const t=performance.now();
+          if(gaze.x!=null && gaze.y!=null) samples.push([gaze.x, gaze.y]);
+          if(t - t0 < 1600) requestAnimationFrame(loop2); else res();
+        }
+        requestAnimationFrame(loop2);
+      });
+
+      const [gx,gy] = mean2(samples);
       if(!isNaN(gx)&&!isNaN(gy)){ gazePts.push([gx,gy]); tgtPts.push([tx,ty]); }
-      await wait(200);
+      await sleep(200);
     }
-    calibMsg.style.display='none';
-    const sol=lsqAffine(gazePts,tgtPts);
+
+    const sol = lsqAffine(gazePts, tgtPts);
     if(sol){ A=sol.A; b=sol.b; alert('Calibración de mirada OK ✅'); }
-    else { alert('No se pudo calibrar. Repite mirando bien el punto.'); }
+    else { alert('No se pudo calibrar. Repite mirando bien los puntos.'); }
   };
 
-  // ===== Calibración boca =====
-  calMouth.onclick = async ()=>{
-    running=false;
+  // ====== Calibración de boca (umbral MAR) ======
+  calMouthBtn.onclick = async ()=>{
+    alert('Calibración de boca: 2 s CERRADA → 2 s ABIERTA (mira a la cámara).');
     const closed=[], opened=[];
-    calibMsg.textContent='Mantén BOCA CERRADA ~2 s'; calibMsg.style.display='block';
-    await sampleFor(2000, ()=>{ if(!isNaN(marDbg) && marDbg>0) closed.push(marDbg); });
-    await wait(300);
-    calibMsg.textContent='Ahora BOCA ABIERTA ~2 s';
-    await sampleFor(2000, ()=>{ if(!isNaN(marDbg) && marDbg>0) opened.push(marDbg); });
-    calibMsg.style.display='none';
-    const mC=median(closed), mO=median(opened);
-    if(isFinite(mC)&&isFinite(mO)){
-      mouthThr=(mC+mO)/2;
-      alert(`Umbral boca fijado: cerrada≈${mC.toFixed(3)} | abierta≈${mO.toFixed(3)} → thr=${mouthThr.toFixed(3)}`);
+    // cerrada
+    const t0 = performance.now();
+    await new Promise(res=>{
+      function loop(){ const t=performance.now();
+        if(!isNaN(marDbg) && marDbg>0) closed.push(marDbg);
+        if(t-t0<2000) requestAnimationFrame(loop); else res();
+      } requestAnimationFrame(loop);
+    });
+    await sleep(300);
+    // abierta
+    const t1 = performance.now();
+    await new Promise(res=>{
+      function loop(){ const t=performance.now();
+        if(!isNaN(marDbg) && marDbg>0) opened.push(marDbg);
+        if(t-t1<2000) requestAnimationFrame(loop); else res();
+      } requestAnimationFrame(loop);
+    });
+
+    const mC = median(closed), mO = median(opened);
+    if(isFinite(mC) && isFinite(mO)){
+      mouthThr = (mC + mO)/2;
+      alert(`Umbral fijado: cerrada≈${mC.toFixed(3)} | abierta≈${mO.toFixed(3)} → thr=${mouthThr.toFixed(3)}`);
+      // actualizar barra
+      marThr.style.left = (Math.max(0, Math.min(1, mouthThr/0.8))*100).toFixed(0)+'%';
     } else {
-      alert('No se pudo medir MAR. Asegura buena luz y rostro visible.');
+      alert('No se pudo medir MAR. Mejora la iluminación y repite.');
     }
   };
 
-  // ===== Utils =====
-  function wait(ms){ return new Promise(r=>setTimeout(r,ms)); }
-  function viewportWH(){ return {W: window.innerWidth, H: window.innerHeight}; }
-  async function showDotAt(nx,ny,holdMs=1600){
-    const {W,H}=viewportWH();
-    calibDot.style.left = (nx*W)+'px';
-    calibDot.style.top  = (ny*H)+'px';
-    calibDot.style.display='block';
-    await wait(holdMs);
-    calibDot.style.display='none';
-  }
-  async function sampleFor(ms, push){
-    const t0=performance.now();
-    return new Promise(res=>{
-      function loop(){
-        const t=performance.now();
-        if(gaze.x!=null&&gaze.y!=null) push([gaze.x,gaze.y]);
-        if(t-t0<ms) requestAnimationFrame(loop); else res();
-      }
-      requestAnimationFrame(loop);
-    });
-  }
+  // ====== Otros controles ======
+  togglePrev.onclick = ()=>{
+    preview.style.display = (preview.style.display==='none' || preview.style.display==='') ? 'block' : 'none';
+  };
+  clearBtn.onclick = ()=>{
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    pts=[];
+    countEl.textContent = 'pts: 0';
+    last=null; smoothed=null;
+  };
+  savePngBtn.onclick = ()=>{
+    const a=document.createElement('a');
+    a.download = `brocha_${Date.now()}.png`;
+    a.href = canvas.toDataURL('image/png');
+    a.click();
+  };
+  saveCsvBtn.onclick = ()=>{
+    const header='t_ms,x,y,mar,drawing\n';
+    const body=pts.map(p=>`${p.t},${Math.round(p.x)},${Math.round(p.y)},${p.mar?.toFixed?.(4)??0},${p.drawing||0}`).join('\n');
+    const blob=new Blob([header+body],{type:'text/csv'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download=`brocha_${Date.now()}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // ====== Utils ======
+  function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
   function mean2(arr){ if(!arr.length) return [NaN,NaN]; const sx=arr.reduce((s,v)=>s+v[0],0), sy=arr.reduce((s,v)=>s+v[1],0); return [sx/arr.length, sy/arr.length]; }
   function transpose(A){ const m=A.length,n=A[0].length,AT=Array.from({length:n},()=>Array(m).fill(0)); for(let i=0;i<m;i++) for(let j=0;j<n;j++) AT[j][i]=A[i][j]; return AT; }
   function mul(A,B){ const m=A.length,n=A[0].length,p=B[0].length,C=Array.from({length:m},()=>Array(p).fill(0)); for(let i=0;i<m;i++) for(let k=0;k<n;k++) for(let j=0;j<p;j++) C[i][j]+=A[i][k]*B[k][j]; return C; }
   function mulVec(A,v){ const m=A.length,n=A[0].length,r=Array(m).fill(0); for(let i=0;i<m;i++) for(let j=0;j<n;j++) r[i]+=A[i][j]*v[j]; return r; }
-  function solveGaussian(A,b){ const n=A.length,M=A.map((row,i)=>row.concat([b[i]])); for(let i=0;i<n;i++){ let max=i; for(let r=i+1;r<n;r++) if(Math.abs(M[r][i])>Math.abs(M[max][i])) max=r; if(Math.abs(M[max][i])<1e-9) return null; [M[i],M[max]]=[M[max],M[i]]; const piv=M[i][i]; for(let k=i;k<=n;k++) M[i][k]/=piv; for(let r=0;r<n;r++) if(r!==i){ const f=M[r][i]; for(let k=i;k<=n;k++) M[r][k]-=f*M[i][k]; } } return M.map(row=>row[n]); }
+  function solveGaussian(A,b){
+    const n=A.length,M=A.map((row,i)=>row.concat([b[i]]));
+    for(let i=0;i<n;i++){
+      let max=i; for(let r=i+1;r<n;r++) if(Math.abs(M[r][i])>Math.abs(M[max][i])) max=r;
+      if(Math.abs(M[max][i])<1e-9) return null;
+      [M[i],M[max]]=[M[max],M[i]];
+      const piv=M[i][i];
+      for(let k=i;k<=n;k++) M[i][k]/=piv;
+      for(let r=0;r<n;r++) if(r!==i){
+        const f=M[r][i]; for(let k=i;k<=n;k++) M[r][k]-=f*M[i][k];
+      }
+    }
+    return M.map(row=>row[n]);
+  }
   function lsqAffine(gazePts,tgtPts){
     const M=[], Z=[];
     for(let i=0;i<gazePts.length;i++){
@@ -304,11 +394,11 @@
     const Mt=transpose(M), MtM=mul(Mt,M), MtZ=mulVec(Mt,Z), p=solveGaussian(MtM,MtZ);
     return p ? {A:[p[0],p[1],p[2],p[3]], b:[p[4],p[5]]} : null;
   }
-  function median(a){ if(!a.length) return NaN; const s=[...a].sort((x,y)=>x-y); const m=Math.floor(s.length/2); return s.length%2?s[m]:(s[m-1]+s[m])/2; }
 
-  // Atajo debug: tecla D activa/para dibujo manual
-  window.addEventListener('keydown', e => { if(e.key==='d'||e.key==='D') drawing=true; });
-  window.addEventListener('keyup',   e => { if(e.key==='d'||e.key==='D') drawing=false; });
+  // Atajos debug: tecla D simula “boca abierta” para probar dibujo
+  window.addEventListener('keydown', e=>{ if(e.key==='d'||e.key==='D') drawing=true; });
+  window.addEventListener('keyup',   e=>{ if(e.key==='d'||e.key==='D') drawing=false; });
+
 })();
 </script>
 </body>
