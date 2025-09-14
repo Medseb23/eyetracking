@@ -1,11 +1,11 @@
-# Gaze Brush (mirada + boca) con **calibración** y **feedback**
+# Diagnóstico Boca + Mirada + Brocha (Streamlit + MediaPipe + WebGazer)
 
-- La **mirada** controla la posición del pincel (WebGazer) con **calibración afín** (4 esquinas + centro).
-- La **boca** (MAR con MediaPipe FaceMesh) **activa** o **detiene** el trazo; incluye **calibración** (cerrada/abierta) para fijar el umbral.
-- Panel de **feedback**: valor MAR en vivo, **barra** con umbral, **preview** opcional de cámara + landmarks.
-- Descarga **PNG** del lienzo y **CSV** de datos (t, x, y, mar, drawing).
+## Modos
+1. **Test de Boca**: muestra preview de webcam + landmarks + **MAR** con umbral.
+2. **Test de Mirada**: cursor movido por WebGazer; (opcional) calibración rápida (4 esquinas + centro).
+3. **Brocha**: mira para mover la brocha; **boca abierta** (MAR>umbral) para dibujar.
 
-## Ejecutar local
+## Uso local
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
