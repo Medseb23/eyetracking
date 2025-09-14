@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Brocha Ojos/Nariz + Boca (estable)</title>
+<title>Brocha: Ojos o Nariz + Boca (getUserMedia)</title>
 
 <!-- OJOS -->
 <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
@@ -19,12 +19,10 @@
   .btn.primary{background:#00e676;color:#111}
   .btn.warn{background:#ff5252}
   .sp{margin-left:auto;font:12px/1.2 monospace;opacity:.9}
-  select.sel{background:#22272e;color:#fff;border:0;border-radius:10px;padding:6px 10px;font-weight:600}
   #stage{position:absolute;inset:62px 10px 10px 10px;border-radius:10px;background:#10131a;overflow:hidden}
   #canvas{position:absolute;inset:0;width:100%;height:100%}
   #cursor{position:absolute;width:20px;height:20px;border:2px solid rgba(255,255,255,.95);border-radius:50%;
-          pointer-events:none;transform:translate(-50%,-50%);display:none;box-shadow:0 0 12px rgba(0,230,118,.25)}
-  #ghost{position:absolute;inset:0;pointer-events:none}
+          pointer-events:none;transform:translate(-50%,-50%);display:none}
   #status{position:absolute;bottom:10px;left:10px;right:10px;display:flex;gap:10px;align-items:center;
           background:rgba(255,255,255,.06);padding:8px 10px;border-radius:10px;z-index:9999}
   #modeTag{font-weight:700;background:#1f2937;padding:4px 8px;border-radius:8px}
@@ -32,7 +30,7 @@
   #marBar{position:relative;height:10px;flex:1;background:#2b2f3a;border-radius:6px;overflow:hidden}
   #marFill{position:absolute;top:0;left:0;height:100%;width:0%;background:#00e676}
   #marThr{position:absolute;top:-3px;width:2px;height:16px;background:#ff5252;left:50%}
-  #marVal{min-width:160px;text-align:right;font:12px/1 monospace;opacity:.9}
+  #marVal{min-width:120px;text-align:right;font:12px/1 monospace;opacity:.9}
   #preview{position:absolute;top:10px;right:10px;width:300px;height:225px;background:#000a;border-radius:8px;display:none;z-index:5000}
   video#rawVideo{display:none}
   #errbar{position:absolute;bottom:0;left:0;right:0;background:#ff3344;color:#100;padding:6px 10px;font:12px/1.3 monospace;
@@ -54,19 +52,11 @@
     <button id="modeGaze" class="btn">2) Test de Movimiento</button>
     <button id="modeBrush" class="btn primary">3) Iniciar Brocha</button>
 
-    <button id="btnRoi" class="btn">🖱️ Zona (ROI)</button>
-    <button id="btnCalRoi" class="btn">🎯 Calibración ROI</button>
-    <button id="btnAutoMar" class="btn">🎚️ Auto-umbral boca</button>
+    <button id="btnRoi" class="btn">🖱️ Definir zona de mirada (ROI)</button>
+    <button id="btnCalRoi" class="btn">🎯 Calibración guiada (ROI)</button>
     <button id="btnResetCal" class="btn warn">♻️ Reset Calibración</button>
 
-    <select id="brushMode" class="sel">
-      <option value="line">✒️ Línea</option>
-      <option value="spray">🟢 Spray</option>
-      <option value="calli">🖋️ Caligrafía</option>
-    </select>
-
     <button id="togglePreview" class="btn">👁️ Preview</button>
-    <button id="undo" class="btn">↩️ Deshacer</button>
     <button id="clear" class="btn warn">🧹 Limpiar</button>
     <button id="savePng" class="btn">🖼️ PNG</button>
     <button id="saveCsv" class="btn">📄 CSV</button>
@@ -75,7 +65,6 @@
 
   <div id="stage">
     <canvas id="canvas"></canvas>
-    <canvas id="ghost"></canvas>
     <div id="cursor"></div>
     <canvas id="preview"></canvas>
     <video id="rawVideo" playsinline autoplay muted></video>
@@ -107,33 +96,24 @@
     brush:8, alpha:.20, mouthThr:.28, debug:true, controlMode:'eyes',
     deadzonePx:8, maxStepPx:24, medianN:5, mouthHys:.05,
     marMedianN:5, marEmaAlpha:.30,
-    marUseEyeScale:true, marEyeFactor:0.35,
-    detConf:.5, trackConf:.5,
-    resamplePx: 2.5,            // espaciamiento fijo de trazo
-    accelMax: 60,               // límite de aceleración px/frame^2
-    deadzoneAuto:true,          // deadzone adaptativa
-    ghostLen: 14                // puntos de cola fantasma
+    marUseEyeScale:true, marEyeFactor:0.35,   // ← NUEVO
+    detConf:.5, trackConf:.5
   }, window.DIAG_CFG||{});
 
   // -------- DOM --------
   const stageEl=document.getElementById('stage');
   const canvas=document.getElementById('canvas'); const ctx=canvas.getContext('2d');
-  const ghost=document.getElementById('ghost'); const gctx=ghost.getContext('2d');
   const cursor=document.getElementById('cursor');
   const preview=document.getElementById('preview'); const pctx=preview.getContext('2d');
   const rawVideo=document.getElementById('rawVideo');
   const countEl=document.getElementById('count'); const modeTag=document.getElementById('modeTag');
   const marVal=document.getElementById('marVal'); const marFill=document.getElementById('marFill'); const marThr=document.getElementById('marThr');
   const roiOverlay=document.getElementById('roiOverlay');
-  const brushModeSel=document.getElementById('brushMode');
 
   // -------- estado --------
   let mode='face'; // 'face' | 'gmove' | 'brush'
   let brush=CFG.brush, alpha=CFG.alpha, mouthThr=CFG.mouthThr;
-  let dpr=1, W=0, H=0, pts=[], path=[], last=null, smoothed=null, vPrev={x:0,y:0};
-  let ghostPts=[];
-
-  let brushMode=brushModeSel.value; brushModeSel.onchange=()=>brushMode=brushModeSel.value;
+  let dpr=1, W=0, H=0, pts=[], last=null, smoothed=null;
 
   // movimiento: ojos/nariz
   let gaze={x:null,y:null};
@@ -144,34 +124,23 @@
   let A=[1,0,0,1], b=[0,0];
   const LS_KEY='diag_calib_affine_v1';
   const ROI_KEY='diag_roi_norm_v1';
-  const MAR_KEY='diag_auto_mar_v1';
 
   // ROI normalizado (0..1)
   let roiNorm = loadJson(ROI_KEY) || {x0:0.05,y0:0.08,x1:0.95,y1:0.92};
 
   // Anti-jitter
-  let histX=[], histY[];
+  let histX=[], histY=[];
   let isPainting=false;
 
   // MAR suavizado
   let marHist=[], marEma=null;
 
-  // Auto-MAR cache
-  const savedMar = loadJson(MAR_KEY);
-  if(savedMar && isFinite(savedMar.mouthThr) && isFinite(savedMar.hys)) {
-    mouthThr = savedMar.mouthThr;
-    CFG.mouthHys = savedMar.hys;
-  }
-
   // -------- tamaño --------
   function resize(){
     dpr=Math.min(window.devicePixelRatio||1,2);
     const r=stageEl.getBoundingClientRect();
-    [canvas,ghost].forEach(cv=>{
-      cv.width=Math.floor(r.width*dpr); cv.height=Math.floor(r.height*dpr);
-      cv.style.width=r.width+'px'; cv.style.height=r.height+'px';
-      cv.getContext('2d').setTransform(dpr,0,0,dpr,0,0);
-    });
+    canvas.width=Math.floor(r.width*dpr); canvas.height=Math.floor(r.height*dpr);
+    canvas.style.width=r.width+'px'; canvas.style.height=r.height+'px'; ctx.setTransform(dpr,0,0,dpr,0,0);
     preview.width=Math.floor(300*dpr); preview.height=Math.floor(225*dpr);
     preview.style.width='300px'; preview.style.height='225px'; pctx.setTransform(dpr,0,0,dpr,0,0);
     W=r.width; H=r.height;
@@ -184,46 +153,19 @@
   document.getElementById('modeGaze').onclick=()=>setMode('gmove');
   document.getElementById('modeBrush').onclick=()=>setMode('brush');
   document.getElementById('togglePreview').onclick=()=>{preview.style.display=(preview.style.display==='none'||preview.style.display==='')?'block':'none';};
-  document.getElementById('undo').onclick=undoLast;
-  document.getElementById('clear').onclick=clearAll;
+  document.getElementById('clear').onclick=()=>{ctx.clearRect(0,0,canvas.width,canvas.height); pts=[]; countEl.textContent='pts: 0'; last=null; smoothed=null;};
   document.getElementById('savePng').onclick=()=>{const a=document.createElement('a'); a.download=`brocha_${Date.now()}.png`; a.href=canvas.toDataURL('image/png'); a.click();};
-  document.getElementById('saveCsv').onclick=saveCsv;
+  document.getElementById('saveCsv').onclick=()=>{const header='t_ms,x,y,mar,mode\n'; const body=pts.map(p=>`${p.t},${Math.round(p.x)},${Math.round(p.y)},${(p.mar??0).toFixed(4)},${CFG.controlMode}`).join('\n'); const blob=new Blob([header+body],{type:'text/csv'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`brocha_${CFG.controlMode}_${Date.now()}.csv`; a.click(); URL.revokeObjectURL(url);};
+
   document.getElementById('btnRoi').onclick = defineRoiWithMouse;
   document.getElementById('btnCalRoi').onclick = guidedRoiCalibration;
   document.getElementById('btnResetCal').onclick = ()=>{ A=[1,0,0,1]; b=[0,0]; saveJson(LS_KEY,{A,b}); alert('Calibración reiniciada.'); };
-  document.getElementById('btnAutoMar').onclick = autoMar;
 
   function setMode(m){
     mode=m;
     modeTag.textContent='Modo: '+(m==='face'?'Test de Boca': m==='gmove'?'Test de Movimiento':'Brocha');
-    if(m==='face') cursor.style.display='none'; else cursor.style.display='block';
+    if(m==='face') cursor.style.display='none';
   }
-
-  function undoLast(){
-    if(path.length===0) return;
-    const lastSeg = path.pop();
-    // Redibuja desde cero
-    ctx.clearRect(0,0,canvas.width,canvas.height);
-    for(const seg of path){ drawSegment(seg); }
-  }
-  function clearAll(){
-    ctx.clearRect(0,0,canvas.width,canvas.height);
-    pts=[]; path=[]; countEl.textContent='pts: 0'; last=null; smoothed=null; vPrev={x:0,y:0};
-  }
-  function saveCsv(){
-    const header='t_ms,x,y,mar,mode\n';
-    const body=pts.map(p=>`${p.t},${Math.round(p.x)},${Math.round(p.y)},${(p.mar??0).toFixed(4)},${CFG.controlMode}`).join('\n');
-    const blob=new Blob([header+body],{type:'text/csv'});
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a'); a.href=url; a.download=`brocha_${CFG.controlMode}_${Date.now()}.csv`; a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  // -------- atajos --------
-  window.addEventListener('keydown',(e)=>{
-    if(e.key==='z' || e.key==='Z') undoLast();
-    if(e.key==='c' || e.key==='C') clearAll();
-  });
 
   // -------- cámara --------
   let gStream=null;
@@ -253,15 +195,20 @@
     if(!res.multiFaceLandmarks || !res.multiFaceLandmarks.length) return;
     const main = pickMainFace(res.multiFaceLandmarks); if(!main) return;
 
+    // --- datos base de cara ---
     faceBox = bboxOf(main);
-    if (faceBox.area < 0.03) { return; } // cara muy pequeña → más errores
+    // Si la cara es muy pequeña en el frame, los labios suelen fallar
+    if (faceBox.area < 0.03) { return; } // ajusta 0.03–0.05 si hace falta
 
+    // --- MAR robusto (comisuras externas + escala por ojos) ---
+    // Landmarks clave:
+    // 13/14 = apertura vertical; 61/291 = comisuras boca; 33/263 = extremos ojos
     const lm = main;
     const d = (i,j)=>{ const a=lm[i], b=lm[j]; return Math.hypot(a.x-b.x, a.y-b.y); };
 
-    const mouthH = d(13,14);
-    let mouthW   = d(61,291);
-    const eyeDst = d(33,263);
+    const mouthH = d(13,14);          // altura de boca
+    let mouthW   = d(61,291);         // ancho de boca
+    const eyeDst = d(33,263);         // distancia entre ojos (escala estable)
 
     const denom = (CFG.marUseEyeScale)
       ? Math.max(mouthW, CFG.marEyeFactor * eyeDst)
@@ -276,19 +223,19 @@
     if (marEma == null) marEma = marMed;
     marEma = CFG.marEmaAlpha * marMed + (1 - CFG.marEmaAlpha) * marEma;
 
-    // UI barra
+    // UI barra (clamp para escala visual)
     const marUi = Math.max(0, Math.min(0.8, marEma));
-    marVal.textContent = `raw:${marRaw.toFixed(3)}  filt:${marEma.toFixed(3)}  thr:${mouthThr.toFixed(2)}±${CFG.mouthHys.toFixed(2)}`;
+    marVal.textContent = `raw:${marRaw.toFixed(3)}  filt:${marEma.toFixed(3)}`;
     marFill.style.width = (marUi / 0.8 * 100).toFixed(0) + '%';
     marThr.style.left   = (Math.max(0, Math.min(1, mouthThr / 0.8)) * 100).toFixed(0) + '%';
 
-    // nariz (posición)
+    // --- nariz (posición) ---
     const NOSE_IDX=[1,4];
     let nz = lm[NOSE_IDX[0]];
     for(const idx of NOSE_IDX){ if(lm[idx] && lm[idx].z < nz.z) nz = lm[idx]; }
     nose = {x:nz.x, y:nz.y, z:nz.z};
 
-    // preview
+    // preview debug
     if(preview.style.display!=='none' && CFG.debug){
       pctx.clearRect(0,0,preview.width,preview.height);
       pctx.drawImage(rawVideo,0,0,preview.width,preview.height);
@@ -331,30 +278,16 @@
       if(histX.length>CFG.medianN){ histX.shift(); histY.shift(); }
       const gxMed = median(histX), gyMed = median(histY);
 
-      // EMA posición adaptativa por velocidad
+      // EMA posición
       if(!smoothed) smoothed={x:gxMed,y:gyMed};
-      const vx = gxMed - smoothed.x, vy = gyMed - smoothed.y;
-      const speed = Math.hypot(vx,vy);
-      const aDyn = clamp(alpha + speed*0.002, 0.10, 0.65); // más rápido → más alpha
-      let nx = aDyn*gxMed + (1-aDyn)*smoothed.x;
-      let ny = aDyn*gyMed + (1-aDyn)*smoothed.y;
+      let nx = CFG.alpha*gxMed + (1-CFG.alpha)*smoothed.x;
+      let ny = CFG.alpha*gyMed + (1-CFG.alpha)*smoothed.y;
 
-      // deadzone adaptativa
-      let dz = CFG.deadzonePx;
-      if(CFG.deadzoneAuto){
-        dz = clamp(CFG.deadzonePx + (speed>8 ? 2 : -1), 4, 14);
-      }
-      if(Math.hypot(nx-smoothed.x, ny-smoothed.y) < dz){ nx = smoothed.x; ny = smoothed.y; }
+      // deadzone
+      if(Math.hypot(nx-smoothed.x, ny-smoothed.y) < CFG.deadzonePx){ nx = smoothed.x; ny = smoothed.y; }
 
-      // límite de paso + aceleración
+      // límite de paso
       [nx,ny] = clampStep(smoothed.x, smoothed.y, nx, ny, CFG.maxStepPx);
-      const ax = (nx-smoothed.x)-vPrev.x, ay = (ny-smoothed.y)-vPrev.y;
-      const accel = Math.hypot(ax,ay);
-      if(accel>CFG.accelMax){
-        const k=CFG.accelMax/(accel||1);
-        nx = smoothed.x + vPrev.x + ax*k; ny = smoothed.y + vPrev.y + ay*k;
-      }
-      vPrev = {x:nx-smoothed.x, y:ny-smoothed.y};
 
       smoothed.x = nx; smoothed.y = ny;
 
@@ -373,27 +306,12 @@
       const tMedX = median(histX), tMedY = median(histY);
 
       if(!smoothed) smoothed={x:tMedX,y:tMedY};
-      const vx = tMedX - smoothed.x, vy = tMedY - smoothed.y;
-      const speed = Math.hypot(vx,vy);
-      const aDyn = clamp(alpha + speed*0.002, 0.10, 0.65);
-      let nx = aDyn*tMedX + (1-aDyn)*smoothed.x;
-      let ny = aDyn*tMedY + (1-aDyn)*smoothed.y;
+      let nx = CFG.alpha*tMedX + (1-CFG.alpha)*smoothed.x;
+      let ny = CFG.alpha*tMedY + (1-CFG.alpha)*smoothed.y;
 
-      let dz = CFG.deadzonePx;
-      if(CFG.deadzoneAuto){
-        dz = clamp(CFG.deadzonePx + (speed>8 ? 2 : -1), 4, 14);
-      }
-      if(Math.hypot(nx-smoothed.x, ny-smoothed.y) < dz){ nx = smoothed.x; ny = smoothed.y; }
+      if(Math.hypot(nx-smoothed.x, ny-smoothed.y) < CFG.deadzonePx){ nx = smoothed.x; ny = smoothed.y; }
 
       [nx,ny] = clampStep(smoothed.x, smoothed.y, nx, ny, CFG.maxStepPx);
-
-      const ax = (nx-smoothed.x)-vPrev.x, ay = (ny-smoothed.y)-vPrev.y;
-      const accel = Math.hypot(ax,ay);
-      if(accel>CFG.accelMax){
-        const k=CFG.accelMax/(accel||1);
-        nx = smoothed.x + vPrev.x + ax*k; ny = smoothed.y + vPrev.y + ay*k;
-      }
-      vPrev = {x:nx-smoothed.x, y:ny-smoothed.y};
 
       smoothed.x = nx; smoothed.y = ny;
       cx = nx; cy = ny;
@@ -406,7 +324,7 @@
       if(isPainting){ isPainting = marEma > closeThr; } else { isPainting = marEma > openThr; }
     }
 
-    // 3) Cursor, ghost y pintar
+    // 3) Mostrar cursor y pintar
     if(cx!=null && cy!=null){
       const x = Math.max(0, Math.min(W-1, cx));
       const y = Math.max(0, Math.min(H-1, cy));
@@ -414,17 +332,16 @@
       if(mode!=='face'){
         cursor.style.display='block';
         cursor.style.left=x+'px'; cursor.style.top=y+'px';
-        const bsz = (brushMode==='calli') ? clamp(brush*(1+Math.min(1, speedAt(x,y)*0.04)), 2, brush*2.2) : brush;
-        cursor.style.width=(bsz*2)+'px'; cursor.style.height=(bsz*2)+'px';
+        cursor.style.width=(brush*2)+'px'; cursor.style.height=(brush*2)+'px';
       } else { cursor.style.display='none'; }
 
-      // ghost trail
-      ghostPts.push({x,y});
-      if(ghostPts.length>CFG.ghostLen) ghostPts.shift();
-      drawGhost();
-
       if(mode==='brush' && isPainting){
-        drawStroke({x,y});
+        if(last){
+          ctx.strokeStyle='rgba(0,200,255,.95)'; ctx.lineWidth=brush; ctx.lineJoin='round'; ctx.lineCap='round';
+          ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(x,y); ctx.stroke();
+          pts.push({t:Date.now(), x, y, mar:marEma});
+          countEl.textContent = `pts: ${pts.length}`;
+        }
       }
       last={x,y};
     }
@@ -435,115 +352,7 @@
   requestAnimationFrame(faceLoop);
 
   // ================================
-  //   Dibujo – modos de brocha
-  // ================================
-  function drawStroke(p){
-    // re-muestreo a distancia fija
-    if(path.length===0){
-      path.push({mode:brushMode, pts:[p]});
-      return;
-    }
-    const seg = path[path.length-1];
-    if(seg.mode !== brushMode){ // nuevo segmento si cambió modo
-      path.push({mode:brushMode, pts:[p]});
-      return;
-    }
-    const lastPt = seg.pts[seg.pts.length-1];
-    const dx=p.x-lastPt.x, dy=p.y-lastPt.y, d=Math.hypot(dx,dy);
-    if(d<CFG.resamplePx) return;
-    const steps = Math.floor(d/CFG.resamplePx);
-    for(let i=1;i<=steps;i++){
-      const k=i/steps;
-      const x=lastPt.x + dx*k, y=lastPt.y + dy*k;
-      const np={x,y};
-      seg.pts.push(np);
-      drawSegmentPoint(seg, np, lastPt);
-      pts.push({t:Date.now(), x, y, mar:marEma});
-    }
-    countEl.textContent = `pts: ${pts.length}`;
-  }
-
-  function drawSegment(seg){
-    const ptsArr = seg.pts;
-    for(let i=1;i<ptsArr.length;i++){
-      drawSegmentPoint(seg, ptsArr[i], ptsArr[i-1]);
-    }
-  }
-
-  function drawSegmentPoint(seg, p, prev){
-    if(seg.mode==='line'){
-      ctx.strokeStyle='rgba(0,200,255,.95)';
-      ctx.lineWidth=brush; ctx.lineJoin='round'; ctx.lineCap='round';
-      ctx.beginPath(); ctx.moveTo(prev.x,prev.y); ctx.lineTo(p.x,p.y); ctx.stroke();
-    } else if(seg.mode==='spray'){
-      const r=brush*0.9, n=6;
-      for(let i=0;i<n;i++){
-        const ang=Math.random()*Math.PI*2;
-        const rad=Math.random()*r;
-        const sx=p.x+Math.cos(ang)*rad, sy=p.y+Math.sin(ang)*rad;
-        ctx.fillStyle='rgba(0,200,255,.35)';
-        ctx.beginPath(); ctx.arc(sx,sy, clamp(brush*0.15,1,3), 0, Math.PI*2); ctx.fill();
-      }
-    } else if(seg.mode==='calli'){
-      const v = Math.hypot(p.x-prev.x, p.y-prev.y);
-      const w = clamp(brush*(0.8 + Math.min(1.2, v*0.06)), 2, brush*2.4);
-      ctx.strokeStyle='rgba(0,200,255,.95)'; ctx.lineWidth=w; ctx.lineJoin='round'; ctx.lineCap='round';
-      ctx.beginPath(); ctx.moveTo(prev.x,prev.y); ctx.lineTo(p.x,p.y); ctx.stroke();
-    }
-  }
-
-  function drawGhost(){
-    gctx.clearRect(0,0,ghost.width,ghost.height);
-    if(ghostPts.length<2) return;
-    gctx.beginPath();
-    for(let i=0;i<ghostPts.length;i++){
-      const gp=ghostPts[i];
-      if(i===0) gctx.moveTo(gp.x,gp.y); else gctx.lineTo(gp.x,gp.y);
-    }
-    gctx.lineWidth=1.5; gctx.strokeStyle='rgba(0,230,118,.35)';
-    gctx.stroke();
-  }
-
-  function speedAt(x,y){
-    if(!last) return 0;
-    return Math.hypot(x-last.x, y-last.y);
-  }
-
-  // ================================
-  //   Auto-MAR (umbral de boca)
-  // ================================
-  async function autoMar(){
-    if(!confirm('Auto-umbral: 1) Mantén boca CERRADA 1.2s. 2) Luego ABRE la boca 1.2s. ¿Listo?')) return;
-    const closeSamp=[], openSamp=[];
-    await collect(1200, closeSamp, 'CERRADA');
-    await sleep(300);
-    await collect(1200, openSamp, 'ABIERTA');
-
-    const medClose = median(closeSamp), medOpen = median(openSamp);
-    const thr = (medClose*2 + medOpen*1)/3; // sesgo hacia evitar falsos positivos
-    const gap = Math.max(0.02, medOpen - medClose);
-    const hys = clamp(gap*0.25, 0.02, 0.12);
-
-    mouthThr = thr; CFG.mouthHys = hys;
-    saveJson(MAR_KEY, {mouthThr:thr, hys});
-    alert(`✅ Auto-umbral listo.\nUmbral: ${thr.toFixed(3)}  Hys: ±${hys.toFixed(3)}`);
-
-    function collect(ms, bucket, label){
-      return new Promise(res=>{
-        const t0=performance.now();
-        function step(){
-          const now=performance.now();
-          if(marEma!=null) bucket.push(marEma);
-          if(now-t0<ms){ requestAnimationFrame(step); }
-          else res();
-        }
-        step();
-      });
-    }
-  }
-
-  // ================================
-  //   Calibración ROI Avanzada (igual + mejoras menores)
+  //   Calibración ROI Avanzada
   // ================================
   function defineRoiWithMouse(){
     alert('Arrastra con el mouse para dibujar la zona (ROI) donde mirarás con los ojos.');
@@ -626,7 +435,7 @@
       els.push(el);
     }
 
-    alert('Calibración: haz clic en cada punto y MIRA ese punto ~1.2s.');
+    alert('Calibración: haz clic en cada punto y MIRA ese punto. Mantén la mirada ~1.2s.');
 
     const gazePts=[], tgtPts=[];
     for(let i=0;i<targets.length;i++){
@@ -638,8 +447,7 @@
           function step(){
             const now=performance.now();
             if(gaze.x!=null&&gaze.y!=null){
-              const rb=stageEl.getBoundingClientRect();
-              samples.push([gaze.x - rb.left, gaze.y - rb.top]);
+              samples.push([gaze.x - r.left, gaze.y - r.top]);
             }
             if(now-t0<1200){ requestAnimationFrame(step); }
             else{
@@ -665,7 +473,6 @@
   function mean2(a){if(!a.length)return[NaN,NaN];const sx=a.reduce((s,v)=>s+v[0],0), sy=a.reduce((s,v)=>s+v[1],0);return[sx/a.length, sy/a.length];}
   function median(arr){ if(!arr.length) return NaN; const a=[...arr].sort((x,y)=>x-y), m=Math.floor(a.length/2); return a.length%2 ? a[m] : (a[m-1]+a[m])/2; }
   function clamp01(v){return Math.max(0,Math.min(1,v));}
-  function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
   function clampStep(sx,sy,nx,ny,maxStep){
     const dx=nx-sx, dy=ny-sy, d=Math.hypot(dx,dy);
     if(!isFinite(d) || d===0) return [sx,sy];
