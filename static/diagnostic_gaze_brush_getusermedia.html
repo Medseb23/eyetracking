@@ -129,17 +129,79 @@
     const lm = res.multiFaceLandmarks[0];
     const top=lm[13], bottom=lm[14], left=lm[78], right=lm[308];
     mar = dist(top,bottom)/Math.max(1e-6, dist(left,right));
+
+    // Feedback MAR simple
     document.getElementById('marVal').textContent = mar.toFixed(3);
+    const marFill = document.getElementById('marFill');
+    const marThr  = document.getElementById('marThr');
+    // escala tosca 0–0.8
+    marFill.style.width = (Math.max(0, Math.min(1, mar/0.8))*100).toFixed(0) + '%';
+    // umbral fijo visual en ~0.28 por defecto (puedes moverlo desde Python si lo pasas)
+    marThr.style.left   = (Math.max(0, Math.min(1, 0.28/0.8))*100).toFixed(0) + '%';
+
+    // Preview (si visible)
+    if(preview.style.display !== 'none'){
+      pctx.clearRect(0,0,preview.width,preview.height);
+      pctx.drawImage(rawVideo, 0, 0, preview.width, preview.height);
+      // landmarks guía
+      pctx.fillStyle='#0f0'; pctx.strokeStyle='#0f0'; pctx.lineWidth=1;
+      function P(p){ return [p.x*preview.width, p.y*preview.height]; }
+      const ptsL=[top,bottom,left,right].map(P);
+      for(const p of ptsL){ pctx.beginPath(); pctx.arc(p[0],p[1],3,0,Math.PI*2); pctx.fill(); }
+      pctx.beginPath(); pctx.moveTo(...ptsL[0]); pctx.lineTo(...ptsL[1]); pctx.stroke();
+      pctx.beginPath(); pctx.moveTo(...ptsL[2]); pctx.lineTo(...ptsL[3]); pctx.stroke();
+    }
   });
 
-  // ======== WebGazer ========
-  webgazer.setRegression('ridge').setTracker('TFFacemesh').begin()
-    .showVideoPreview(false).showPredictionPoints(false).showFaceFeedbackBox(false);
+  // ======== WebGazer (ajuste sin encadenar tras begin) ========
+  try{
+    // Configurar antes de comenzar
+    webgazer.setRegression('ridge');
+    webgazer.setTracker('TFFacemesh');
 
-  webgazer.setGazeListener((data)=>{
-    if(data){ cursor.style.display='block'; cursor.style.left=data.x+'px'; cursor.style.top=data.y+'px'; }
+    // Apagar overlays usando params (versión actual)
+    if (webgazer.params){
+      webgazer.params.showVideoPreview = false;
+      webgazer.params.showFaceFeedbackBox = false;
+      webgazer.params.showPredictionPoints = false;
+    }
+
+    // Comenzar (no encadenar nada después)
+    webgazer.begin();
+
+    // Listener de mirada
+    webgazer.setGazeListener((data)=>{
+      if(!data) return;
+      cursor.style.display='block';
+      cursor.style.left = data.x + 'px';
+      cursor.style.top  = data.y + 'px';
+    });
+  }catch(e){
+    showErr('webgazer init: ' + e.message);
+  }
+
+  // ======== UI básica ========
+  document.getElementById('togglePreview').addEventListener('click', ()=>{
+    preview.style.display = (preview.style.display==='none'||preview.style.display==='') ? 'block' : 'none';
   });
+  document.getElementById('modeFace').addEventListener('click', ()=>{ document.getElementById('modeTag').textContent='Modo: Test de Boca'; });
+  document.getElementById('modeGaze').addEventListener('click', ()=>{ document.getElementById('modeTag').textContent='Modo: Test de Mirada'; });
+  document.getElementById('modeBrush').addEventListener('click', ()=>{ document.getElementById('modeTag').textContent='Modo: Brocha'; });
 
+  // Canvas sizing
+  function resize(){
+    const dpr = Math.min(window.devicePixelRatio||1, 2);
+    const r = document.getElementById('stage').getBoundingClientRect();
+    canvas.width = Math.floor(r.width*dpr); canvas.height=Math.floor(r.height*dpr);
+    canvas.style.width=r.width+'px'; canvas.style.height=r.height+'px';
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    preview.width = Math.floor(300*dpr); preview.height=Math.floor(225*dpr);
+    preview.style.width='300px'; preview.style.height='225px';
+    pctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+  window.addEventListener('resize', resize); resize();
+
+  // arrancar bucles
   requestAnimationFrame(faceLoop);
 })();
 </script>
