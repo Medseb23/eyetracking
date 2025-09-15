@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Brocha: Ojos/Iris o Nariz + Boca</title>
 
-<!-- OJOS (fallback, opcional) -->
+<!-- (Opcional) WebGazer fallback -->
 <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
-<!-- CARA (FaceMesh con Iris) -->
+<!-- MediaPipe FaceMesh (con Iris) -->
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh"></script>
 
 <style>
@@ -83,18 +83,17 @@
 
 <script>
 (function(){
-  // ---------------- errores visibles ----------------
+  // ---------- errores visibles ----------
   const errbar=document.getElementById('errbar');
   function showErr(msg){ errbar.textContent='⚠️ '+msg; errbar.style.display='block'; }
   window.onerror=(m,src,l,c)=>showErr((m||'Error')+(l?` @${l}:${c||0}`:''));
   window.onunhandledrejection=(ev)=>showErr('Promise rejection: '+(ev.reason?.message||ev.reason||''));
 
-  // ---------------- configuración ----------------
+  // ---------- config ----------
   const CFG = Object.assign({
     brush:8, alpha:.20, mouthThr:.28, debug:true, controlMode:'eyes',
     useIris:true,
-    // NUEVO: inversión/ganancia por eje (para Macs/cámaras antiguas)
-    invertX:false, invertY:false, gainX:1.15, gainY:1.15,
+    invertX:false, invertY:false, gainX:1.15, gainY:1.15,   // inversión/ganancia
     deadzonePx:6, maxStepPx:22, medianN:5, mouthHys:.05,
     marMedianN:5, marEmaAlpha:.30,
     marUseEyeScale:true, marEyeFactor:0.35,
@@ -103,7 +102,7 @@
     anchors:{enabled:true, dwellMs:300, radiusPx:28, adjust:0.12}
   }, window.DIAG_CFG||{});
 
-  // ---------------- DOM ----------------
+  // ---------- DOM ----------
   const stageEl=document.getElementById('stage');
   const canvas=document.getElementById('canvas'); const ctx=canvas.getContext('2d');
   const cursor=document.getElementById('cursor');
@@ -114,17 +113,15 @@
   const roiOverlay=document.getElementById('roiOverlay');
   const ctlBadge=document.getElementById('ctlBadge'); const ancBadge=document.getElementById('ancBadge');
 
-  // ---------------- estado ----------------
+  // ---------- estado ----------
   let mode='face';
   let brush=CFG.brush, alpha=CFG.alpha, mouthThr=CFG.mouthThr;
   let dpr=1, W=0, H=0, pts=[], last=null;
 
-  // señales
-  let gaze={x:null,y:null};       // ← se actualizará con IRIS (fix)
+  let gaze={x:null,y:null};      // ← se actualiza con Iris
   let nose={x:null,y:null,z:null};
   let faceBox=null;
 
-  // afín, ROI, anclas
   let A=[1,0,0,1], b=[0,0];
   const LS_KEY='diag_calib_affine_v2';
   const ROI_KEY='diag_roi_norm_v2';
@@ -133,13 +130,8 @@
   let anchorsOn = loadJson(ANC_KEY) ?? !!CFG.anchors.enabled;
   let dwellStart=null, currentAnchor=null;
 
-  // MAR (boca)
   let marHist=[], marEma=null, isPainting=false;
 
-  // historial mediana (ojos/nariz si usas fallback)
-  let histX=[], histY=[];
-
-  // worker Kalman
   const kalmanWorker = makeKalmanWorker();
   let kalmanReady=false;
   kalmanWorker.onmessage = (e)=>{
@@ -148,7 +140,7 @@
   };
   kalmanWorker.postMessage({cfg:{procNoise:1e-2, measNoise:2.0, maxStep:CFG.maxStepPx, deadzone:CFG.deadzonePx}});
 
-  // ---------------- tamaño ----------------
+  // ---------- tamaño ----------
   function resize(){
     dpr=Math.min(window.devicePixelRatio||1,2);
     const r=stageEl.getBoundingClientRect();
@@ -161,7 +153,7 @@
   }
   window.addEventListener('resize', resize); resize();
 
-  // ---------------- UI ----------------
+  // ---------- UI ----------
   document.getElementById('modeFace').onclick=()=>setMode('face');
   document.getElementById('modeGaze').onclick=()=>setMode('gmove');
   document.getElementById('modeBrush').onclick=()=>setMode('brush');
@@ -190,12 +182,13 @@
     if(m==='face') cursor.style.display='none';
   }
 
-  // ---------------- cámara (con diagnóstico básico) ----------------
+  // ---------- cámara ----------
   let gStream=null;
   async function startCameraFlow(auto=false){
     try{
       gStream=await navigator.mediaDevices.getUserMedia({
-        video:{width:{ideal:1280},height:{ideal:720},frameRate:{ideal:60,max:60},facingMode:"user"}, audio:false
+        video:{width:{ideal:1280},height:{ideal:720},frameRate:{ideal:60,max:60},facingMode:"user"},
+        audio:false
       });
       rawVideo.srcObject=gStream; await rawVideo.play(); errbar.style.display='none';
       if(!auto) alert('✅ Cámara iniciada.');
@@ -207,7 +200,7 @@
   document.getElementById('testCam').onclick=()=>startCameraFlow(false);
   window.addEventListener('load', ()=>startCameraFlow(true));
 
-  // ---------------- FaceMesh (Iris+boca+nariz) ----------------
+  // ---------- FaceMesh (Iris, boca, nariz) ----------
   const faceMesh=new FaceMesh({ locateFile:(f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
   faceMesh.setOptions({ maxNumFaces:3, refineLandmarks:true, minDetectionConfidence: CFG.detConf, minTrackingConfidence: CFG.trackConf });
 
@@ -216,8 +209,6 @@
   function dist2(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
 
   async function faceLoop(){ try{ if(rawVideo.readyState>=2 && !rawVideo.paused && !rawVideo.ended){ await faceMesh.send({image:rawVideo}); } }catch(e){ showErr('faceLoop: '+e.message); } requestAnimationFrame(faceLoop); }
-
-  const IRIS_R=[468,469,470,471], IRIS_L=[473,474,475,476];
 
   faceMesh.onResults(res=>{
     if(!res.multiFaceLandmarks || !res.multiFaceLandmarks.length) return;
@@ -244,27 +235,39 @@
     let nz=lm[NOSE_IDX[0]]; for(const idx of NOSE_IDX){ if(lm[idx] && lm[idx].z < nz.z) nz = lm[idx]; }
     nose = {x:nz.x, y:nz.y, z:nz.z};
 
-    // --- Ojos con Iris → gaze + worker (FIX + inversión/ganancia) ---
-    if(CFG.controlMode==='eyes' && CFG.useIris){
+    // --- Ojos con Iris → gaze + worker (FIX vertical con párpados) ---
+    if (CFG.controlMode === 'eyes' && CFG.useIris) {
       // centros del iris
-      const c = (idxs)=> idxs.reduce((s,i)=>({x:s.x+lm[i].x, y:s.y+lm[i].y}), {x:0,y:0});
-      const rC=c(IRIS_R); rC.x/=IRIS_R.length; rC.y/=IRIS_R.length;
-      const lC=c(IRIS_L); lC.x/=IRIS_L.length; lC.y/=IRIS_L.length;
+      const avg = (idxs)=> idxs.reduce((s,i)=>({x:s.x+lm[i].x, y:s.y+lm[i].y}), {x:0,y:0});
+      const rC=avg([468,469,470,471]); rC.x/=4; rC.y/=4;
+      const lC=avg([473,474,475,476]); lC.x/=4; lC.y/=4;
 
-      // extremos de ojo (para escala)
-      const r0=lm[33], r1=lm[133], l0=lm[362], l1=lm[263];
-      const rx = (rC.x - Math.min(r0.x,r1.x)) / Math.max(1e-6, Math.abs(r0.x-r1.x));
-      const ry = (rC.y - Math.min(r0.y,r1.y)) / Math.max(1e-6, Math.abs(r0.y-r1.y));
-      const lx = (lC.x - Math.min(l0.x,l1.x)) / Math.max(1e-6, Math.abs(l0.x-l1.x));
-      const ly = (lC.y - Math.min(l0.y,l1.y)) / Math.max(1e-6, Math.abs(l0.y-l1.y));
+      // extremos horizontales (ancho ojo)
+      const R_L = lm[33],  R_R = lm[133];
+      const L_L = lm[362], L_R = lm[263];
 
-      // normalizados 0..1
-      let gxN = 1 - Math.max(0, Math.min(1, (rx+lx)/2)); // invertir horizontal por defecto
-      let gyN = Math.max(0, Math.min(1, (ry+ly)/2));
+      // párpados superior/inferior (alto ojo)
+      const R_T = lm[159], R_B = lm[145];
+      const L_T = lm[386], L_B = lm[374];
+
+      const rW = Math.max(1e-6, Math.abs(R_R.x - R_L.x));
+      const lW = Math.max(1e-6, Math.abs(L_R.x - L_L.x));
+      const rH = Math.max(1e-6, Math.abs(R_B.y - R_T.y));
+      const lH = Math.max(1e-6, Math.abs(L_B.y - L_T.y));
+
+      const rx = (rC.x - Math.min(R_L.x, R_R.x)) / rW;
+      const lx = (lC.x - Math.min(L_L.x, L_R.x)) / lW;
+
+      const ry = (rC.y - Math.min(R_T.y, R_B.y)) / rH;
+      const ly = (lC.y - Math.min(L_T.y, L_B.y)) / lH;
+
+      let gxN = 1 - Math.max(0, Math.min(1, (rx + lx) / 2)); // invierte horizontal por defecto
+      let gyN = Math.max(0, Math.min(1, (ry + ly) / 2));
+
       if (CFG.invertX) gxN = 1 - gxN;
       if (CFG.invertY) gyN = 1 - gyN;
-      gxN = Math.max(0, Math.min(1, 0.5 + (gxN-0.5)*CFG.gainX));
-      gyN = Math.max(0, Math.min(1, 0.5 + (gyN-0.5)*CFG.gainY));
+      gxN = Math.max(0, Math.min(1, 0.5 + (gxN - 0.5) * CFG.gainX));
+      gyN = Math.max(0, Math.min(1, 0.5 + (gyN - 0.5) * CFG.gainY));
 
       // mapear a ROI
       const r=stageEl.getBoundingClientRect();
@@ -274,24 +277,22 @@
       const gx = rx0 + gxN*rw;
       const gy = ry0 + gyN*rh;
 
-      // ✅ FIX: alimentar la variable global usada por calibración/preview
+      // ✅ alimentar calibración/preview y enviar al worker
       gaze.x = gx; 
       gaze.y = gy;
-
-      // enviar al worker para suavizado
-      if(kalmanReady){ kalmanWorker.postMessage({in:{x:gx, y:gy, W, H}}); }
+      if (kalmanReady) kalmanWorker.postMessage({ in: { x: gx, y: gy, W, H } });
     }
 
     if(preview.style.display!=='none' && CFG.debug){
       pctx.clearRect(0,0,preview.width,preview.height);
       pctx.drawImage(rawVideo,0,0,preview.width,preview.height);
       const toPX = (p) => [p.x*preview.width, p.y*preview.height];
-      const dot = (x,y,r=3,c='#0f0')=>{ pctx.fillStyle=c; pctx.beginPath(); pctx.arc(x,y,r,0,Math.PI*2); pctx.fill(); };
-      IRIS_R.concat(IRIS_L,[13,14,61,291,33,263]).forEach(i=>{ const [x,y]=toPX(lm[i]); dot(x,y,3,'#0f0'); });
+      const draw = (i,c='#0f0',r=3)=>{ const [x,y]=toPX(lm[i]); pctx.fillStyle=c; pctx.beginPath(); pctx.arc(x,y,r,0,Math.PI*2); pctx.fill(); };
+      [468,469,470,471,473,474,475,476,13,14,61,291,33,263,159,145,386,374].forEach(i=>draw(i));
     }
   });
 
-  // ---------------- WebGazer fallback (si no Iris) ----------------
+  // ---------- WebGazer fallback (si no Iris) ----------
   if(!CFG.useIris && CFG.controlMode==='eyes'){
     try{
       webgazer.setRegression('ridge'); webgazer.setTracker('TFFacemesh');
@@ -301,19 +302,17 @@
     }catch(e){ showErr('webgazer init: '+e.message); }
   }
 
-  // ---------------- cargar calibración previa ----------------
+  // ---------- carga calibración ----------
   const saved = loadJson(LS_KEY); if(saved && saved.A && saved.b){ A=saved.A; b=saved.b; }
 
-  // ---------------- loop principal (nariz + boca) ----------------
+  // ---------- loop principal (nariz + boca) ----------
   function loop(){
-    // nariz como control alternativo
     if(CFG.controlMode==='nose' && faceBox && nose.x!=null){
       const nxr = (nose.x - faceBox.minx)/Math.max(1e-6, (faceBox.maxx - faceBox.minx));
       const nyr = (nose.y - faceBox.miny)/Math.max(1e-6, (faceBox.maxy - faceBox.miny));
       const tx = nxr * W, ty = nyr * H;
       if(kalmanReady){ kalmanWorker.postMessage({in:{x:tx,y:ty,W,H}}); }
     }
-    // gatillo de boca (histeresis)
     if(marEma!=null){
       const openThr  = mouthThr + CFG.mouthHys;
       const closeThr = mouthThr - CFG.mouthHys;
@@ -324,10 +323,9 @@
   requestAnimationFrame(loop);
   requestAnimationFrame(faceLoop);
 
-  // ---------------- recibir posición filtrada y pintar ----------------
+  // ---------- recibir filtrado y pintar ----------
   let filtX=null, filtY=null;
   function applyFiltered(x,y){
-    // afín para ojos
     if(CFG.controlMode==='eyes'){
       const tx = A[0]*x + A[1]*y + b[0];
       const ty = A[2]*x + A[3]*y + b[1];
@@ -335,12 +333,10 @@
       filtY = Math.max(0, Math.min(H-1, ty));
     }else{ filtX = Math.max(0, Math.min(W-1, x)); filtY = Math.max(0, Math.min(H-1, y)); }
 
-    // snap a grilla
     if(CFG.snap?.enabled){
       const s = snapToGrid(filtX, filtY, CFG.snap.size, CFG.snap.radius, CFG.snap.blend);
       filtX = s.x; filtY = s.y;
     }
-    // anclas anti-drift
     if(anchorsOn && CFG.controlMode==='eyes') applyAnchors();
 
     if(mode!=='face'){
@@ -363,7 +359,7 @@
     }
   }
 
-  // ---------------- ROI + Calibración ----------------
+  // ---------- ROI + Calibración ----------
   function defineRoiWithMouse(){
     alert('Arrastra con el mouse para dibujar la zona (ROI) donde mirarás con los ojos.');
     const r=stageEl.getBoundingClientRect();
@@ -434,7 +430,7 @@
           const samples=[]; const t0=performance.now();
           function step(){
             const now=performance.now(); if(gaze.x!=null&&gaze.y!=null){
-              samples.push([gaze.x - r.left, gaze.y - r.top]); // ← usa gaze (arreglado)
+              samples.push([gaze.x - r.left, gaze.y - r.top]); // usa gaze (Iris)
             }
             if(now-t0<1200){ requestAnimationFrame(step); }
             else{
@@ -453,7 +449,7 @@
     else alert('No se pudo calibrar (muestras insuficientes).');
   }
 
-  // ---------------- anclas & snap ----------------
+  // ---------- anclas & snap ----------
   function getAnchors(){
     const r=stageEl.getBoundingClientRect();
     const rx0=roiNorm.x0*r.width, ry0=roiNorm.y0*r.height;
@@ -494,7 +490,7 @@
     return {x,y};
   }
 
-  // ---------------- utilidades ----------------
+  // ---------- utils ----------
   function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
   function mean2(a){if(!a.length)return[NaN,NaN];const sx=a.reduce((s,v)=>s+v[0],0), sy=a.reduce((s,v)=>s+v[1],0);return[sx/a.length, sy/a.length];}
   function median(arr){ if(!arr.length) return NaN; const a=[...arr].sort((x,y)=>x-y), m=Math.floor(a.length/2); return a.length%2 ? a[m] : (a[m-1]+a[m])/2; }
@@ -517,7 +513,7 @@
   function saveJson(k,v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
   function loadJson(k){ try{ const s=localStorage.getItem(k); return s?JSON.parse(s):null; }catch(e){ return null; } }
 
-  // ---------------- Worker Kalman ----------------
+  // ---------- Worker Kalman ----------
   function makeKalmanWorker(){
     const code = `
       let ready=false, cfg={procNoise:1e-2, measNoise:2.0, maxStep:22, deadzone:6};
@@ -534,9 +530,7 @@
           const F=[1,0,dt,0, 0,1,0,dt, 0,0,1,0, 0,0,0,1];
           const Q=[cfg.procNoise,0,0,0, 0,cfg.procNoise,0,0, 0,0,1e-3,0, 0,0,0,1e-3];
           const P=this.P;
-          // x = F x
           this.x=[ F[0]*this.x[0]+F[2]*this.x[2], F[5]*this.x[1]+F[7]*this.x[3], this.x[2], this.x[3] ];
-          // P = FPF^T + Q
           const FP=new Array(16).fill(0);
           for(let i=0;i<4;i++)for(let j=0;j<4;j++)for(let k=0;k<4;k++) FP[i*4+j]+=F[i*4+k]*P[k*4+j];
           const FPt=new Array(16).fill(0);
@@ -549,8 +543,7 @@
           const P=this.P, H=this.H, R=this.R;
           const S00 = H[0]*P[0]*H[0] + R[0];
           const S11 = H[5]*P[5]*H[5] + R[3];
-          const S01 = 0;
-          const det = S00*S11 - S01*S01;
+          const det = S00*S11;
           if(Math.abs(det)<1e-9) return;
           const iS00=S11/det, iS11=S00/det;
           const K0 = P[0]*H[0]*iS00;
