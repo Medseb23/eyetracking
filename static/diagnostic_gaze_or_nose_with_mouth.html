@@ -32,18 +32,17 @@
   #dbg { position:absolute; right:10px; bottom:10px; background:rgba(0,0,0,.55); padding:6px 8px; border-radius:8px; font:12px/1.2 monospace; opacity: .8 }
   video#rawVideo { display:none }
   #errbar { position:absolute; top:0; left:0; right:0; background:#ff3344; color:#100; padding:6px 10px; font:12px/1.3 monospace; display:none; z-index:10001; text-align: center; }
-  .roi-overlay { position:absolute; inset:0; pointer-events:none }
-  .roi-rect { position:absolute; border:2px dashed rgba(0,230,118,.9); border-radius:8px; box-shadow:0 0 0 200vmax rgba(0,0,0,.45) inset; transition: all .3s }
-  .calib-target { position:absolute; width:18px; height:18px; border-radius:50%; background:#00e676; box-shadow:0 0 0 6px rgba(0,230,118,.2); transform:translate(-50%,-50%); pointer-events:auto; cursor:crosshair; transition: all .3s }
-  .calib-target.wait { background:#fbbf24; box-shadow:0 0 0 6px rgba(251,191,36,.25); }
-  .calib-target.done { background:#22d3ee; box-shadow:0 0 0 6px rgba(34,211,238,.25); }
+  .calib-step-ui { position:absolute; inset:0; display:flex; flex-direction:column; justify-content:center; align-items:center; background:rgba(0,0,0,0.7); z-index:100; }
+  .calib-step-ui h2 { margin:0; padding:10px; font-size: 2em; }
+  .calib-step-ui p { margin:5px 0 20px; font-size: 1.2em; max-width: 600px; text-align: center; }
+  .calib-point { position:absolute; width:20px; height:20px; border:2px solid #fff; border-radius:50%; transform:translate(-50%,-50%); transition: all .3s ease-out; }
 </style>
 </head>
 <body>
 <div id="wrap">
   <div id="topbar">
     <button id="testCam" class="btn primary">Iniciar Cámara</button>
-    <button id="btnCenter" class="btn">Centrar Mirada</button>
+    <button id="btnCalibrate" class="btn">Calibrar Mirada</button>
     <button id="btnStart" class="btn">Iniciar Brocha</button>
     <button id="btnClear" class="btn warn">🧹 Limpiar</button>
     <span class="sp" id="count">pts: 0</span>
@@ -52,7 +51,10 @@
   <div id="stage">
     <canvas id="canvas"></canvas>
     <div id="cursor"></div>
-    <div class="roi-overlay" id="roiOverlay"></div>
+    <div id="calibUI" class="calib-step-ui" style="display: none;">
+      <h2 id="calibTitle"></h2>
+      <p id="calibDescription"></p>
+    </div>
     <div id="dbg" style="display:none"></div>
     <video id="rawVideo" playsinline autoplay muted></video>
   </div>
@@ -72,7 +74,7 @@
 <script>
 (function(){
   // --- Estado de la aplicación ---
-  let mode = 'idle'; // 'idle', 'calibrating', 'brush'
+  let mode = 'idle'; // 'idle', 'calibrating_center', 'calibrating_limits', 'brush'
   let isPainting = false;
   
   // --- Configuración (ajustable) ---
@@ -84,8 +86,9 @@
     marEmaAlpha: 0.30,
     // Coordenadas de calibración para centrar el iris
     calib_center: {x: 0.5, y: 0.5},
-    gainX: 1.15,
-    gainY: 1.15,
+    // Ganancia y Offset para el mapeo
+    offset: {x: 0, y: 0},
+    scale: {x: 1, y: 1},
     invertY: true,
   };
 
@@ -100,8 +103,9 @@
   const marVal = document.getElementById('marVal');
   const marFill = document.getElementById('marFill');
   const marThr = document.getElementById('marThr');
-  const roiOverlay = document.getElementById('roiOverlay');
-  const btnCenter = document.getElementById('btnCenter');
+  const calibUI = document.getElementById('calibUI');
+  const calibTitle = document.getElementById('calibTitle');
+  const calibDescription = document.getElementById('calibDescription');
 
   // --- Señales y datos ---
   let W, H;
@@ -109,6 +113,14 @@
   let marEma = null;
   let lastPoint = null;
   let drawingPoints = [];
+  let calibrationPoints = {
+      center: null,
+      left: null,
+      right: null,
+      up: null,
+      down: null
+  };
+  let calib_step = 0;
 
   // --- Funciones de Utilidad ---
   function showErr(msg) { errbar.textContent = `⚠️ ${msg}`; errbar.style.display = 'block'; }
@@ -116,8 +128,6 @@
   function hideErr() { errbar.style.display = 'none'; }
   function median(arr) { if(!arr.length) return NaN; const a=[...arr].sort((x,y)=>x-y), m=Math.floor(a.length/2); return a.length%2 ? a[m] : (a[m-1]+a[m])/2; }
   function dist2(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
-  function saveJson(k, v) { try { if(v == null) localStorage.removeItem(k); else localStorage.setItem(k, JSON.stringify(v)); } catch(e) {} }
-  function loadJson(k) { try { const s = localStorage.getItem(k); return s ? JSON.parse(s) : null; } catch(e) { return null; } }
 
   // --- Inicialización y Redimensionamiento ---
   function resize() {
@@ -185,10 +195,10 @@
     }
     
     // Aplicar la calibración manual
-    irisX_norm = 0.5 + (irisX_norm - CFG.calib_center.x) * CFG.gainX;
+    irisX_norm = (irisX_norm - CFG.calib_center.x) * CFG.scale.x + CFG.offset.x;
     if (CFG.invertY) irisY_norm = 1 - irisY_norm;
-    irisY_norm = 0.5 + (irisY_norm - CFG.calib_center.y) * CFG.gainY;
-    
+    irisY_norm = (irisY_norm - CFG.calib_center.y) * CFG.scale.y + CFG.offset.y;
+
     irisN.x = irisX_norm;
     irisN.y = irisY_norm;
   }
@@ -211,7 +221,7 @@
     const x = Math.max(0, Math.min(W, px));
     const y = Math.max(0, Math.min(H, py));
 
-    if (mode === 'brush' || mode === 'calibrating') {
+    if (mode === 'brush' || mode.startsWith('calibrating')) {
       cursor.style.display = 'block';
       cursor.style.left = x + 'px';
       cursor.style.top = y + 'px';
@@ -243,7 +253,7 @@
       await rawVideo.play();
       hideErr();
       requestAnimationFrame(faceLoop);
-      showInfo('Cámara lista. Por favor, centra tu mirada.');
+      showInfo('Cámara lista. Por favor, calibra tu mirada.');
     } catch (e) {
       showErr(`No se pudo acceder a la cámara. ${e.name}: ${e.message}`);
     }
@@ -256,19 +266,81 @@
     requestAnimationFrame(faceLoop);
   }
 
+  // --- Funciones de Calibración ---
+  function showCalibUI(title, description) {
+    calibUI.style.display = 'flex';
+    calibTitle.textContent = title;
+    calibDescription.textContent = description;
+  }
+
+  function hideCalibUI() {
+    calibUI.style.display = 'none';
+  }
+
+  async function startCalibProcess() {
+    if (irisN.x === null) {
+      showErr('Aún no se ha detectado tu rostro. Asegúrate de que la cámara esté encendida.');
+      return;
+    }
+
+    mode = 'calibrating_center';
+    showCalibUI("Paso 1: Centrar Mirada", "Mira al centro de la pantalla y haz clic en cualquier parte para registrar el punto central de tus ojos.");
+    
+    await new Promise(res => {
+        stageEl.onclick = () => {
+            calibrationPoints.center = {x: irisN.x, y: irisN.y};
+            res();
+        };
+    });
+    
+    hideCalibUI();
+    showInfo("✅ Punto central registrado. Ahora definiremos los límites.");
+    await new Promise(r => setTimeout(r, 1000));
+
+    // Paso 2: Calibración de límites
+    const limitPoints = [
+      { id: 'left', title: 'Mira a la IZQUIERDA', desc: 'Mira el borde izquierdo de la pantalla y haz clic.' },
+      { id: 'right', title: 'Mira a la DERECHA', desc: 'Mira el borde derecho de la pantalla y haz clic.' },
+      { id: 'up', title: 'Mira ARRIBA', desc: 'Mira el borde superior de la pantalla y haz clic.' },
+      { id: 'down', title: 'Mira ABAJO', desc: 'Mira el borde inferior de la pantalla y haz clic.' },
+    ];
+
+    for (const point of limitPoints) {
+        showCalibUI(`Paso 2: ${point.title}`, point.desc);
+        await new Promise(res => {
+            stageEl.onclick = () => {
+                calibrationPoints[point.id] = {x: irisN.x, y: irisN.y};
+                res();
+            };
+        });
+        hideCalibUI();
+        showInfo(`✅ Punto ${point.id} registrado.`);
+        await new Promise(r => setTimeout(r, 500));
+    }
+
+    calculateCalibrationParameters();
+    showInfo("✅ Calibración completa. Puedes iniciar la brocha.");
+  }
+
+  function calculateCalibrationParameters() {
+    const { center, left, right, up, down } = calibrationPoints;
+    if (!center || !left || !right || !up || !down) return;
+
+    // Calcular el desplazamiento (offset)
+    CFG.offset.x = 0.5 - center.x;
+    CFG.offset.y = 0.5 - center.y;
+
+    // Calcular la escala (ganancia)
+    const rangeX = Math.abs(right.x - left.x);
+    const rangeY = Math.abs(down.y - up.y);
+    
+    if (rangeX > 0) CFG.scale.x = 1 / rangeX;
+    if (rangeY > 0) CFG.scale.y = 1 / rangeY;
+  }
+
   // --- Eventos de Botones ---
   document.getElementById('testCam').onclick = startCamera;
-  document.getElementById('btnCenter').onclick = () => {
-    if (irisN.x !== null) {
-      CFG.calib_center.x = irisN.x;
-      CFG.calib_center.y = irisN.y;
-      showInfo('✅ Mirada centrada. Ahora puedes iniciar la brocha.');
-      mode = 'calibrating';
-      modeTag.textContent = 'Modo: Calibrando (Centrado)';
-    } else {
-      showErr('Aún no se ha detectado tu rostro. Asegúrate de que la cámara esté encendida.');
-    }
-  };
+  document.getElementById('btnCalibrate').onclick = startCalibProcess;
   document.getElementById('btnStart').onclick = () => {
     mode = 'brush';
     modeTag.textContent = 'Modo: Brocha';
