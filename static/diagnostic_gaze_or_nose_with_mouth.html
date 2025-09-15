@@ -289,7 +289,7 @@
       [468,469,470,471,473,474,475,476].forEach(i=>dot(lm[i].x,lm[i].y,'#0f0',2.5));
     }
 
-    if(mode!=='face'){
+    if(mode!=='face' && (CFG.controlMode === 'eyes' || CFG.controlMode === 'nose')){
       cursor.style.display='block';
       cursor.style.left=x+'px'; cursor.style.top=y+'px';
       cursor.style.width=(brush*2)+'px'; cursor.style.height=(brush*2)+'px';
