@@ -5,436 +5,444 @@
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Brocha: Ojos/Iris o Nariz + Boca (ROI default affine)</title>
 
-<!-- Fallback opcional -->
 <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
-<!-- MediaPipe FaceMesh con Iris -->
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh"></script>
 
 <style>
-  html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0f1115;color:#fff}
-  #wrap{position:relative;width:100%;height:100vh}
-  #topbar{position:absolute;top:10px;left:10px;right:10px;display:flex;gap:8px;flex-wrap:wrap;background:rgba(0,0,0,.45);padding:8px 10px;border-radius:10px;align-items:center;z-index:10000}
-  .btn{appearance:none;border:0;padding:6px 10px;border-radius:10px;cursor:pointer;background:#22272e;color:#fff;font-weight:600}
-  .btn.primary{background:#00e676;color:#111}
-  .btn.warn{background:#ff5252}
-  .sp{margin-left:auto;font:12px/1.2 monospace;opacity:.9}
-  #stage{position:absolute;inset:62px 10px 10px 10px;border-radius:10px;background:#10131a;overflow:hidden}
-  #canvas{position:absolute;inset:0;width:100%;height:100%}
-  #cursor{position:absolute;width:20px;height:20px;border:2px solid rgba(255,255,255,.95);border-radius:50%;pointer-events:none;transform:translate(-50%,-50%);display:none}
-  #status{position:absolute;bottom:10px;left:10px;right:10px;display:flex;gap:10px;align-items:center;background:rgba(255,255,255,.06);padding:8px 10px;border-radius:10px;z-index:9999}
-  #modeTag{font-weight:700;background:#1f2937;padding:4px 8px;border-radius:8px}
-  #marPanel{display:flex;align-items:center;gap:8px;flex:1}
-  #marBar{position:relative;height:10px;flex:1;background:#2b2f3a;border-radius:6px;overflow:hidden}
-  #marFill{position:absolute;top:0;left:0;height:100%;width:0%;background:#00e676}
-  #marThr{position:absolute;top:-3px;width:2px;height:16px;background:#ff5252;left:50%}
-  #marVal{min-width:140px;text-align:right;font:12px/1 monospace;opacity:.9}
-  #preview{position:absolute;top:10px;right:10px;width:300px;height:225px;background:#000a;border-radius:8px;display:none;z-index:5000}
-  #dbg{position:absolute;right:10px;bottom:10px;background:rgba(0,0,0,.55);padding:6px 8px;border-radius:8px;font:12px/1.2 monospace}
-  video#rawVideo{display:none}
-  #errbar{position:absolute;bottom:0;left:0;right:0;background:#ff3344;color:#100;padding:6px 10px;font:12px/1.3 monospace;display:none;z-index:10001}
-  .roi-overlay{position:absolute;inset:0;pointer-events:none}
-  .roi-rect{position:absolute;border:2px dashed rgba(0,230,118,.9);border-radius:8px;box-shadow:0 0 0 200vmax rgba(0,0,0,.45) inset}
-  .calib-target{position:absolute;width:18px;height:18px;border-radius:50%;background:#00e676;box-shadow:0 0 0 6px rgba(0,230,118,.2);transform:translate(-50%,-50%);pointer-events:auto;cursor:crosshair}
-  .calib-target.wait{background:#fbbf24; box-shadow:0 0 0 6px rgba(251,191,36,.25)}
-  .calib-target.done{background:#22d3ee; box-shadow:0 0 0 6px rgba(34,211,238,.25)}
-  .badge{padding:2px 6px;border-radius:6px;background:#1f2937;margin-left:6px;font:12px/1 monospace}
+  html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0f1115;color:#fff}
+  #wrap{position:relative;width:100%;height:100vh}
+  #topbar{position:absolute;top:10px;left:10px;right:10px;display:flex;gap:8px;flex-wrap:wrap;background:rgba(0,0,0,.45);padding:8px 10px;border-radius:10px;align-items:center;z-index:10000}
+  .btn{appearance:none;border:0;padding:6px 10px;border-radius:10px;cursor:pointer;background:#22272e;color:#fff;font-weight:600}
+  .btn.primary{background:#00e676;color:#111}
+  .btn.warn{background:#ff5252}
+  .sp{margin-left:auto;font:12px/1.2 monospace;opacity:.9}
+  #stage{position:absolute;inset:62px 10px 10px 10px;border-radius:10px;background:#10131a;overflow:hidden}
+  #canvas{position:absolute;inset:0;width:100%;height:100%}
+  #cursor{position:absolute;width:20px;height:20px;border:2px solid rgba(255,255,255,.95);border-radius:50%;pointer-events:none;transform:translate(-50%,-50%);display:none}
+  #status{position:absolute;bottom:10px;left:10px;right:10px;display:flex;gap:10px;align-items:center;background:rgba(255,255,255,.06);padding:8px 10px;border-radius:10px;z-index:9999}
+  #modeTag{font-weight:700;background:#1f2937;padding:4px 8px;border-radius:8px}
+  #marPanel{display:flex;align-items:center;gap:8px;flex:1}
+  #marBar{position:relative;height:10px;flex:1;background:#2b2f3a;border-radius:6px;overflow:hidden}
+  #marFill{position:absolute;top:0;left:0;height:100%;width:0%;background:#00e676}
+  #marThr{position:absolute;top:-3px;width:2px;height:16px;background:#ff5252;left:50%}
+  #marVal{min-width:140px;text-align:right;font:12px/1 monospace;opacity:.9}
+  #preview{position:absolute;top:10px;right:10px;width:300px;height:225px;background:#000a;border-radius:8px;display:none;z-index:5000}
+  #dbg{position:absolute;right:10px;bottom:10px;background:rgba(0,0,0,.55);padding:6px 8px;border-radius:8px;font:12px/1.2 monospace}
+  video#rawVideo{display:none}
+  #errbar{position:absolute;bottom:0;left:0;right:0;background:#ff3344;color:#100;padding:6px 10px;font:12px/1.3 monospace;display:none;z-index:10001}
+  .roi-overlay{position:absolute;inset:0;pointer-events:none}
+  .roi-rect{position:absolute;border:2px dashed rgba(0,230,118,.9);border-radius:8px;box-shadow:0 0 0 200vmax rgba(0,0,0,.45) inset}
+  .calib-target{position:absolute;width:18px;height:18px;border-radius:50%;background:#00e676;box-shadow:0 0 0 6px rgba(0,230,118,.2);transform:translate(-50%,-50%);pointer-events:auto;cursor:crosshair}
+  .calib-target.wait{background:#fbbf24; box-shadow:0 0 0 6px rgba(251,191,36,.25)}
+  .calib-target.done{background:#22d3ee; box-shadow:0 0 0 6px rgba(34,211,238,.25)}
+  .badge{padding:2px 6px;border-radius:6px;background:#1f2937;margin-left:6px;font:12px/1 monospace}
 </style>
 </head>
 <body>
 <div id="wrap">
-  <div id="topbar">
-    <button id="testCam" class="btn">🎥 Probar cámara</button>
-    <button id="modeFace" class="btn">1) Test de Boca</button>
-    <button id="modeGaze" class="btn">2) Test de Movimiento</button>
-    <button id="modeBrush" class="btn primary">3) Iniciar Brocha</button>
+  <div id="topbar">
+    <button id="testCam" class="btn">🎥 Probar cámara</button>
+    <button id="modeFace" class="btn">1) Test de Boca</button>
+    <button id="modeGaze" class="btn">2) Test de Movimiento</button>
+    <button id="modeBrush" class="btn primary">3) Iniciar Brocha</button>
 
-    <button id="btnRoi" class="btn">🖱️ ROI</button>
-    <button id="btnCalRoi" class="btn">🎯 Calibración OJOS (ROI)</button>
-    <button id="btnResetCal" class="btn warn">♻️ Reset Calibración</button>
+    <button id="btnRoi" class="btn">🖱️ ROI</button>
+    <button id="btnCalRoi" class="btn">🎯 Calibración OJOS (ROI)</button>
+    <button id="btnResetCal" class="btn warn">♻️ Reset Calibración</button>
 
-    <button id="togglePreview" class="btn">👁️ Preview</button>
-    <button id="clear" class="btn warn">🧹 Limpiar</button>
-    <button id="savePng" class="btn">🖼️ PNG</button>
-    <button id="saveCsv" class="btn">📄 CSV</button>
-    <span class="sp" id="count">pts: 0</span>
-  </div>
+    <button id="togglePreview" class="btn">👁️ Preview</button>
+    <button id="clear" class="btn warn">🧹 Limpiar</button>
+    <button id="savePng" class="btn">🖼️ PNG</button>
+    <button id="saveCsv" class="btn">📄 CSV</button>
+    <span class="sp" id="count">pts: 0</span>
+  </div>
 
-  <div id="stage">
-    <canvas id="canvas"></canvas>
-    <div id="cursor"></div>
-    <canvas id="preview"></canvas>
-    <div id="dbg" style="display:none"></div>
-    <video id="rawVideo" playsinline autoplay muted></video>
-    <div class="roi-overlay" id="roiOverlay"></div>
-  </div>
+  <div id="stage">
+    <canvas id="canvas"></canvas>
+    <div id="cursor"></div>
+    <canvas id="preview"></canvas>
+    <div id="dbg" style="display:none"></div>
+    <video id="rawVideo" playsinline autoplay muted></video>
+    <div class="roi-overlay" id="roiOverlay"></div>
+  </div>
 
-  <div id="status">
-    <span id="modeTag">Modo: Test de Boca</span>
-    <div id="marPanel">
-      <span>MAR:</span>
-      <div id="marBar"><div id="marFill"></div><div id="marThr"></div></div>
-      <span id="marVal">—</span>
-      <span class="badge" id="ctlBadge">Control: OJOS (Iris)</span>
-    </div>
-  </div>
+  <div id="status">
+    <span id="modeTag">Modo: Test de Boca</span>
+    <div id="marPanel">
+      <span>MAR:</span>
+      <div id="marBar"><div id="marFill"></div><div id="marThr"></div></div>
+      <span id="marVal">—</span>
+      <span class="badge" id="ctlBadge">Control: OJOS (Iris)</span>
+    </div>
+  </div>
 
-  <div id="errbar"></div>
+  <div id="errbar"></div>
 </div>
 
 <script>
 (function(){
-  // ---------- errores ----------
-  const errbar=document.getElementById('errbar');
-  function showErr(msg){ errbar.textContent='⚠️ '+msg; errbar.style.display='block'; }
-  window.onerror=(m,src,l,c)=>showErr((m||'Error')+(l?` @${l}:${c||0}`:''));
-  window.onunhandledrejection=(ev)=>showErr('Promise rejection: '+(ev.reason?.message||ev.reason||''));
+  // ---------- errores ----------
+  const errbar=document.getElementById('errbar');
+  function showErr(msg){ errbar.textContent='⚠️ '+msg; errbar.style.display='block'; }
+  window.onerror=(m,src,l,c)=>showErr((m||'Error')+(l?` @${l}:${c||0}`:''));
+  window.onunhandledrejection=(ev)=>showErr('Promise rejection: '+(ev.reason?.message||ev.reason||''));
 
-  // ---------- config ----------
-  const CFG = Object.assign({
-    brush:8, alpha:.20, mouthThr:.28, debug:true, controlMode:'eyes',
-    useIris:true,
-    invertX:false, invertY:false,  // ← como lo tienes ahora
-    gainX:1.15, gainY:1.15,
-    deadzonePx:6, maxStepPx:22, medianN:5, mouthHys:.05,
-    marMedianN:5, marEmaAlpha:.30,
-    marUseEyeScale:true, marEyeFactor:0.35,
-    detConf:.5, trackConf:.5,
-  }, window.DIAG_CFG||{});
+  // ---------- config ----------
+  const CFG = Object.assign({
+    brush:8, alpha:.20, mouthThr:.28, debug:true, controlMode:'eyes',
+    useIris:true,
+    invertX:false, invertY:false,
+    gainX:1.15, gainY:1.15,
+    deadzonePx:6, maxStepPx:22, medianN:5, mouthHys:.05,
+    marMedianN:5, marEmaAlpha:.30,
+    marUseEyeScale:true, marEyeFactor:0.35,
+    detConf:.5, trackConf:.5,
+  }, window.DIAG_CFG||{});
 
-  // ---------- DOM ----------
-  const stageEl=document.getElementById('stage');
-  const canvas=document.getElementById('canvas'); const ctx=canvas.getContext('2d');
-  const cursor=document.getElementById('cursor');
-  const preview=document.getElementById('preview'); const pctx=preview.getContext('2d');
-  const dbg=document.getElementById('dbg');
-  const rawVideo=document.getElementById('rawVideo');
-  const countEl=document.getElementById('count'); const modeTag=document.getElementById('modeTag');
-  const marVal=document.getElementById('marVal'); const marFill=document.getElementById('marFill'); const marThr=document.getElementById('marThr');
-  const roiOverlay=document.getElementById('roiOverlay');
+  // ---------- DOM ----------
+  const stageEl=document.getElementById('stage');
+  const canvas=document.getElementById('canvas'); const ctx=canvas.getContext('2d');
+  const cursor=document.getElementById('cursor');
+  const preview=document.getElementById('preview'); const pctx=preview.getContext('2d');
+  const dbg=document.getElementById('dbg');
+  const rawVideo=document.getElementById('rawVideo');
+  const countEl=document.getElementById('count'); const modeTag=document.getElementById('modeTag');
+  const marVal=document.getElementById('marVal'); const marFill=document.getElementById('marFill'); const marThr=document.getElementById('marThr');
+  const roiOverlay=document.getElementById('roiOverlay');
 
-  // ---------- estado ----------
-  let mode='face';
-  let brush=CFG.brush, alpha=CFG.alpha, mouthThr=CFG.mouthThr;
-  let dpr=1, W=0, H=0, pts=[], last=null;
+  // ---------- estado ----------
+  let mode='face';
+  let brush=CFG.brush, alpha=CFG.alpha, mouthThr=CFG.mouthThr;
+  let dpr=1, W=0, H=0, pts=[], last=null;
 
-  // señales
-  let irisN={x:null,y:null};     // mirada NORMALIZADA (0..1)
-  let nose={x:null,y:null,z:null};
-  let faceBox=null;
+  // señales
+  let irisN={x:null,y:null};
+  let nose={x:null,y:null,z:null};
+  let faceBox=null;
 
-  // afín irisN→píxeles (por defecto: ROI), y flag de calibración cargada
-  let A=[1,0,0,1], b=[0,0];
-  let hasCalib=false;
-  const LS_KEY='diag_calib_affine_irisN_v1';
-  const ROI_KEY='diag_roi_norm_v3';
-  let roiNorm = loadJson(ROI_KEY) || {x0:0.08,y0:0.08,x1:0.92,y1:0.92};
+  // afín irisN→píxeles (por defecto: ROI), y flag de calibración cargada
+  let A=[1,0,0,1], b=[0,0];
+  let hasCalib=false;
+  const LS_KEY='diag_calib_affine_irisN_v1';
+  const ROI_KEY='diag_roi_norm_v3';
+  let roiNorm = loadJson(ROI_KEY) || {x0:0.08,y0:0.08,x1:0.92,y1:0.92};
 
-  // MAR (boca)
-  let marHist=[], marEma=null, isPainting=false;
+  // MAR (boca)
+  let marHist=[], marEma=null, isPainting=false;
 
-  // ---------- tamaño ----------
-  function resize(){
-    dpr=Math.min(window.devicePixelRatio||1,2);
-    const r=stageEl.getBoundingClientRect();
-    canvas.width=Math.floor(r.width*dpr); canvas.height=Math.floor(r.height*dpr);
-    canvas.style.width=r.width+'px'; canvas.style.height=r.height+'px'; ctx.setTransform(dpr,0,0,dpr,0,0);
-    preview.width=Math.floor(300*dpr); preview.height=Math.floor(225*dpr);
-    preview.style.width='300px'; preview.style.height='225px'; pctx.setTransform(dpr,0,0,dpr,0,0);
-    W=r.width; H=r.height;
-    drawRoiRect();
-    if(!hasCalib) setDefaultAffineFromROI(); // ← FIX CLAVE
-  }
-  window.addEventListener('resize', resize); resize();
+  // ---------- tamaño ----------
+  function resize(){
+    dpr=Math.min(window.devicePixelRatio||1,2);
+    const r=stageEl.getBoundingClientRect();
+    canvas.width=Math.floor(r.width*dpr); canvas.height=Math.floor(r.height*dpr);
+    canvas.style.width=r.width+'px'; canvas.style.height=r.height+'px'; ctx.setTransform(dpr,0,0,dpr,0,0);
+    preview.width=Math.floor(300*dpr); preview.height=Math.floor(225*dpr);
+    preview.style.width='300px'; preview.style.height='225px'; pctx.setTransform(dpr,0,0,dpr,0,0);
+    W=r.width; H=r.height;
+    drawRoiRect();
+    if(!hasCalib) setDefaultAffineFromROI();
+  }
+  window.addEventListener('resize', resize); resize();
 
-  function setDefaultAffineFromROI(){
-    const r=stageEl.getBoundingClientRect();
-    const rx0=roiNorm.x0*r.width, ry0=roiNorm.y0*r.height;
-    const rw =(roiNorm.x1-roiNorm.x0)*r.width;
-    const rh =(roiNorm.y1-roiNorm.y0)*r.height;
-    // irisN (0..1) → ROI en píxeles
-    A=[rw,0,0,rh];
-    b=[rx0,ry0];
-  }
+  function setDefaultAffineFromROI(){
+    const r=stageEl.getBoundingClientRect();
+    const rx0=roiNorm.x0*r.width, ry0=roiNorm.y0*r.height;
+    const rw =(roiNorm.x1-roiNorm.x0)*r.width;
+    const rh =(roiNorm.y1-roiNorm.y0)*r.height;
+    // irisN (0..1) → ROI en píxeles
+    A=[rw,0,0,rh];
+    b=[rx0,ry0];
+  }
 
-  // ---------- UI ----------
-  document.getElementById('modeFace').onclick=()=>setMode('face');
-  document.getElementById('modeGaze').onclick=()=>setMode('gmove');
-  document.getElementById('modeBrush').onclick=()=>setMode('brush');
-  document.getElementById('togglePreview').onclick=()=>{
-    const vis=(preview.style.display==='none'||preview.style.display==='')?'block':'none';
-    preview.style.display=vis; dbg.style.display=vis;
-  };
-  document.getElementById('clear').onclick=()=>{ctx.clearRect(0,0,canvas.width,canvas.height); pts=[]; countEl.textContent='pts: 0'; last=null;};
-  document.getElementById('savePng').onclick=()=>{const a=document.createElement('a'); a.download=`brocha_${Date.now()}.png`; a.href=canvas.toDataURL('image/png'); a.click();};
-  document.getElementById('saveCsv').onclick=()=>{
-    const header='t_ms,x,y,mar,mode\n';
-    const body=pts.map(p=>`${p.t},${Math.round(p.x)},${Math.round(p.y)},${(p.mar??0).toFixed(4)},eyes`).join('\n');
-    const blob=new Blob([header+body],{type:'text/csv'}); const url=URL.createObjectURL(blob);
-    const a=document.createElement('a'); a.href=url; a.download=`brocha_eyes_${Date.now()}.csv`; a.click(); URL.revokeObjectURL(url);
-  };
-  document.getElementById('btnRoi').onclick = defineRoiWithMouse;
-  document.getElementById('btnCalRoi').onclick = guidedRoiCalibration;
-  document.getElementById('btnResetCal').onclick = ()=>{
-    hasCalib=false; setDefaultAffineFromROI(); saveJson(LS_KEY,null);
-    alert('Calibración reiniciada (se usa mapeo por defecto al ROI).');
-  };
+  // ---------- UI ----------
+  document.getElementById('modeFace').onclick=()=>setMode('face');
+  document.getElementById('modeGaze').onclick=()=>setMode('gmove');
+  document.getElementById('modeBrush').onclick=()=>setMode('brush');
+  document.getElementById('togglePreview').onclick=()=>{
+    const vis=(preview.style.display==='none'||preview.style.display==='')?'block':'none';
+    preview.style.display=vis; dbg.style.display=vis;
+  };
+  document.getElementById('clear').onclick=()=>{ctx.clearRect(0,0,canvas.width,canvas.height); pts=[]; countEl.textContent='pts: 0'; last=null;};
+  document.getElementById('savePng').onclick=()=>{const a=document.createElement('a'); a.download=`brocha_${Date.now()}.png`; a.href=canvas.toDataURL('image/png'); a.click();};
+  document.getElementById('saveCsv').onclick=()=>{
+    const header='t_ms,x,y,mar,mode\n';
+    const body=pts.map(p=>`${p.t},${Math.round(p.x)},${Math.round(p.y)},${(p.mar??0).toFixed(4)},eyes`).join('\n');
+    const blob=new Blob([header+body],{type:'text/csv'}); const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download=`brocha_eyes_${Date.now()}.csv`; a.click(); URL.revokeObjectURL(url);
+  };
+  document.getElementById('btnRoi').onclick = defineRoiWithMouse;
+  document.getElementById('btnCalRoi').onclick = guidedRoiCalibration;
+  document.getElementById('btnResetCal').onclick = ()=>{
+    hasCalib=false; setDefaultAffineFromROI(); saveJson(LS_KEY,null);
+    alert('Calibración reiniciada (se usa mapeo por defecto al ROI).');
+  };
 
-  function setMode(m){
-    mode=m;
-    modeTag.textContent='Modo: '+(m==='face'?'Test de Boca': m==='gmove'?'Test de Movimiento':'Brocha');
-    if(m==='face') cursor.style.display='none';
-  }
+  function setMode(m){
+    mode=m;
+    modeTag.textContent='Modo: '+(m==='face'?'Test de Boca': m==='gmove'?'Test de Movimiento':'Brocha');
+    if(m==='face') cursor.style.display='none';
+  }
 
-  // ---------- cámara ----------
-  async function startCameraFlow(auto=false){
-    try{
-      const stream=await navigator.mediaDevices.getUserMedia({
-        video:{width:{ideal:1280},height:{ideal:720},frameRate:{ideal:60,max:60},facingMode:"user"},
-        audio:false
-      });
-      rawVideo.srcObject=stream; await rawVideo.play(); errbar.style.display='none';
-      if(!auto) alert('✅ Cámara iniciada.');
-    }catch(e){
-      const hintIframe = (window.self !== window.top) ? "\n👉 Si estás en Streamlit, embebe el iframe con allow=\"camera; microphone\"." : "";
-      showErr('No se pudo acceder a la cámara: '+(e.name||'')+' — '+(e.message||e)+hintIframe+"\nPulsa «Probar cámara» para reintentar.");
-    }
-  }
-  document.getElementById('testCam').onclick=()=>startCameraFlow(false);
-  window.addEventListener('load', ()=>startCameraFlow(true));
+  // ---------- cámara ----------
+  async function startCameraFlow(auto=false){
+    try{
+      const stream=await navigator.mediaDevices.getUserMedia({
+        video:{width:{ideal:1280},height:{ideal:720},frameRate:{ideal:60,max:60},facingMode:"user"},
+        audio:false
+      });
+      rawVideo.srcObject=stream; await rawVideo.play(); errbar.style.display='none';
+      if(!auto) alert('✅ Cámara iniciada.');
+    }catch(e){
+      const hintIframe = (window.self !== window.top) ? "\n👉 Si estás en Streamlit, embebe el iframe con allow=\"camera; microphone\"." : "";
+      showErr('No se pudo acceder a la cámara: '+(e.name||'')+' — '+(e.message||e)+hintIframe+"\nPulsa «Probar cámara» para reintentar.");
+    }
+  }
+  document.getElementById('testCam').onclick=()=>startCameraFlow(false);
+  window.addEventListener('load', ()=>startCameraFlow(true));
 
-  // ---------- FaceMesh (Iris, boca, nariz) ----------
-  const faceMesh=new FaceMesh({ locateFile:(f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
-  faceMesh.setOptions({ maxNumFaces:3, refineLandmarks:true, minDetectionConfidence: CFG.detConf, minTrackingConfidence: CFG.trackConf });
+  // ---------- FaceMesh (Iris, boca, nariz) ----------
+  const faceMesh=new FaceMesh({ locateFile:(f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
+  faceMesh.setOptions({ maxNumFaces:3, refineLandmarks:true, minDetectionConfidence: CFG.detConf, minTrackingConfidence: CFG.trackConf });
 
-  function bboxOf(lm){let minx=1,miny=1,maxx=0,maxy=0; for(const p of lm){minx=Math.min(minx,p.x); miny=Math.min(miny,p.y); maxx=Math.max(maxx,p.x); maxy=Math.max(maxy,p.y);} return {minx,miny,maxx,maxy,cx:(minx+maxx)/2,cy:(miny+maxy)/2,area:(maxx-minx)*(maxy-miny)};}
-  function pickMainFace(arr){ if(!arr||!arr.length) return null; let k=0,b=Infinity; for(let i=0;i<arr.length;i++){ const bb=bboxOf(arr[i]); const dc=(bb.cx-0.5)**2+(bb.cy-0.5)**2; const s=dc/(bb.area+1e-6); if(s<b){b=s;k=i;} } return arr[k]; }
-  function dist2(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
+  function bboxOf(lm){let minx=1,miny=1,maxx=0,maxy=0; for(const p of lm){minx=Math.min(minx,p.x); miny=Math.min(miny,p.y); maxx=Math.max(maxx,p.x); maxy=Math.max(maxy,p.y);} return {minx,miny,maxx,maxy,cx:(minx+maxx)/2,cy:(miny+maxy)/2,area:(maxx-minx)*(maxy-miny)};}
+  function pickMainFace(arr){ if(!arr||!arr.length) return null; let k=0,b=Infinity; for(let i=0;i<arr.length;i++){ const bb=bboxOf(arr[i]); const dc=(bb.cx-0.5)**2+(bb.cy-0.5)**2; const s=dc/(bb.area+1e-6); if(s<b){b=s;k=i;} } return arr[k]; }
+  function dist2(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
 
-  async function faceLoop(){ try{ if(rawVideo.readyState>=2 && !rawVideo.paused && !rawVideo.ended){ await faceMesh.send({image:rawVideo}); } }catch(e){ showErr('faceLoop: '+e.message); } requestAnimationFrame(faceLoop); }
+  async function faceLoop(){ try{ if(rawVideo.readyState>=2 && !rawVideo.paused && !rawVideo.ended){ await faceMesh.send({image:rawVideo}); } }catch(e){ showErr('faceLoop: '+e.message); } requestAnimationFrame(faceLoop); }
 
-  faceMesh.onResults(res=>{
-    if(!res.multiFaceLandmarks || !res.multiFaceLandmarks.length) return;
-    const lm = pickMainFace(res.multiFaceLandmarks); if(!lm) return;
+  faceMesh.onResults(res=>{
+    if(!res.multiFaceLandmarks || !res.multiFaceLandmarks.length) return;
+    const lm = pickMainFace(res.multiFaceLandmarks); if(!lm) return;
 
-    faceBox = bboxOf(lm);
-    if (faceBox.area < 0.02) return;
+    faceBox = bboxOf(lm);
+    if (faceBox.area < 0.02) return;
 
-    // --- Boca (MAR) ---
-    const mouthH = dist2(lm[13], lm[14]);
-    const mouthW = dist2(lm[61], lm[291]);
-    const eyeDst  = dist2(lm[33], lm[263]);
-    const denom = (CFG.marUseEyeScale) ? Math.max(mouthW, CFG.marEyeFactor*eyeDst) : mouthW;
-    const marRaw = mouthH / Math.max(1e-6, denom);
-    marHist.push(marRaw); if(marHist.length>CFG.marMedianN) marHist.shift();
-    const med = median(marHist); marEma = (marEma==null)? med : CFG.marEmaAlpha*med + (1-CFG.marEmaAlpha)*marEma;
-    const marUi = Math.max(0, Math.min(0.8, marEma));
-    marVal.textContent = `raw:${marRaw.toFixed(3)}  filt:${marEma.toFixed(3)}`;
-    marFill.style.width = (marUi/0.8*100).toFixed(0)+'%';
-    marThr.style.left = (Math.max(0, Math.min(1, mouthThr/0.8))*100).toFixed(0)+'%';
+    // --- Boca (MAR) ---
+    const mouthH = dist2(lm[13], lm[14]);
+    const mouthW = dist2(lm[61], lm[291]);
+    const eyeDst  = dist2(lm[33], lm[263]);
+    const denom = (CFG.marUseEyeScale) ? Math.max(mouthW, CFG.marEyeFactor*eyeDst) : mouthW;
+    const marRaw = mouthH / Math.max(1e-6, denom);
+    marHist.push(marRaw); if(marHist.length>CFG.marMedianN) marHist.shift();
+    const med = median(marHist); marEma = (marEma==null)? med : CFG.marEmaAlpha*med + (1-CFG.marEmaAlpha)*marEma;
+    const marUi = Math.max(0, Math.min(0.8, marEma));
+    marVal.textContent = `raw:${marRaw.toFixed(3)}  filt:${marEma.toFixed(3)}`;
+    marFill.style.width = (marUi/0.8*100).toFixed(0)+'%';
+    marThr.style.left = (Math.max(0, Math.min(1, mouthThr/0.8))*100).toFixed(0)+'%';
 
-    // --- Nariz (por si usas ese modo) ---
-    const NOSE_IDX=[1,4];
-    let nz=lm[NOSE_IDX[0]]; for(const idx of NOSE_IDX){ if(lm[idx] && lm[idx].z < nz.z) nz = lm[idx]; }
-    nose = {x:nz.x, y:nz.y, z:nz.z};
+    // --- Nariz (por si usas ese modo) ---
+    const NOSE_IDX=[1,4];
+    let nz=lm[NOSE_IDX[0]]; for(const idx of NOSE_IDX){ if(lm[idx] && lm[idx].z < nz.z) nz = lm[idx]; }
+    nose = {x:nz.x, y:nz.y, z:nz.z};
 
-    // --- Ojos con Iris → irisN (0..1) ---
-    const avg = (idxs)=> idxs.reduce((s,i)=>({x:s.x+lm[i].x, y:s.y+lm[i].y}), {x:0,y:0});
-    const rC=avg([468,469,470,471]); rC.x/=4; rC.y/=4;
-    const lC=avg([473,474,475,476]); lC.x/=4; lC.y/=4;
+    // --- Ojos con Iris → irisN (0..1) ---
+    const avg = (idxs)=> idxs.reduce((s,i)=>({x:s.x+lm[i].x, y:s.y+lm[i].y}), {x:0,y:0});
+    const rC=avg([468,469,470,471]); rC.x/=4; rC.y/=4;
+    const lC=avg([473,474,475,476]); lC.x/=4; lC.y/=4;
 
-    // extremos horizontales; párpados (alto)
-    const R_L = lm[33],  R_R = lm[133], L_L = lm[362], L_R = lm[263];
-    const R_T = lm[159], R_B = lm[145], L_T = lm[386], L_B = lm[374];
+    const R_L = lm[33], R_R = lm[133], L_L = lm[362], L_R = lm[263];
+    const R_T = lm[159], R_B = lm[145], L_T = lm[386], L_B = lm[374];
 
-    const rW = Math.max(1e-6, Math.abs(R_R.x - R_L.x));
-    const lW = Math.max(1e-6, Math.abs(L_R.x - L_L.x));
-    const rH = Math.max(1e-6, Math.abs(R_B.y - R_T.y));
-    const lH = Math.max(1e-6, Math.abs(L_B.y - L_T.y));
+    const rW = Math.max(1e-6, Math.abs(R_R.x - R_L.x));
+    const lW = Math.max(1e-6, Math.abs(L_R.x - L_L.x));
+    const rH = Math.max(1e-6, Math.abs(R_B.y - R_T.y));
+    const lH = Math.max(1e-6, Math.abs(L_B.y - L_T.y));
 
-    let rx = (rC.x - Math.min(R_L.x, R_R.x)) / rW;
-    let lx = (lC.x - Math.min(L_L.x, L_R.x)) / lW;
-    let ry = (rC.y - Math.min(R_T.y, R_B.y)) / rH;
-    let ly = (lC.y - Math.min(L_T.y, L_B.y)) / lH;
+    let rx = (rC.x - R_L.x) / rW;
+    let lx = (lC.x - L_L.x) / lW;
+    let ry = (rC.y - R_T.y) / rH;
+    let ly = (lC.y - L_T.y) / lH;
 
-    let gxN = Math.max(0, Math.min(1, (rx + lx) / 2));
-    let gyN = Math.max(0, Math.min(1, (ry + ly) / 2));
-    if (CFG.invertX) gxN = 1 - gxN;
-    if (CFG.invertY) gyN = 1 - gyN;
-    gxN = Math.max(0, Math.min(1, 0.5 + (gxN - 0.5) * CFG.gainX));
-    gyN = Math.max(0, Math.min(1, 0.5 + (gyN - 0.5) * CFG.gainY));
+    let gxN = (rx + lx) / 2;
+    let gyN = (ry + ly) / 2;
+    
+    if (CFG.invertX) gxN = 1 - gxN;
+    if (CFG.invertY) gyN = 1 - gyN;
 
-    irisN.x = gxN; irisN.y = gyN;
+    gxN = Math.max(0, Math.min(1, 0.5 + (gxN - 0.5) * CFG.gainX));
+    gyN = Math.max(0, Math.min(1, 0.5 + (gyN - 0.5) * CFG.gainY));
 
-    // Proyección por la afín (ROI por defecto o calibrada)
-    const px = A[0]*irisN.x + A[1]*irisN.y + b[0];
-    const py = A[2]*irisN.x + A[3]*irisN.y + b[1];
+    // Corregir la inversión del eje Y
+    gyN = 1 - gyN;
 
-    // Dibujo / cursor
-    const x = Math.max(0, Math.min(W-1, px));
-    const y = Math.max(0, Math.min(H-1, py));
+    irisN.x = gxN; irisN.y = gyN;
+   
+    // Proyección por la afín (ROI por defecto o calibrada)
+    let px, py;
+    if (CFG.controlMode === 'nose') {
+      px = W * nose.x;
+      py = H * nose.y;
+    } else {
+      px = A[0]*irisN.x + A[1]*irisN.y + b[0];
+      py = A[2]*irisN.x + A[3]*irisN.y + b[1];
+    }
+    
+    // Dibujo / cursor
+    const x = Math.max(0, Math.min(W-1, px));
+    const y = Math.max(0, Math.min(H-1, py));
 
-    if(preview.style.display!=='none' && CFG.debug){
-      dbg.textContent = `irisN=(${irisN.x.toFixed(2)}, ${irisN.y.toFixed(2)})  px=(${x|0},${y|0})  hasCalib=${hasCalib}`;
-      pctx.clearRect(0,0,preview.width,preview.height);
-      pctx.drawImage(rawVideo,0,0,preview.width,preview.height);
-      const dot=(u,v,c='#0f0',r=3)=>{pctx.fillStyle=c;pctx.beginPath();pctx.arc(u*preview.width,v*preview.height,r,0,7);pctx.fill();};
-      [468,469,470,471,473,474,475,476].forEach(i=>dot(lm[i].x,lm[i].y,'#0f0',2.5));
-    }
+    if(preview.style.display!=='none' && CFG.debug){
+      dbg.textContent = `irisN=(${irisN.x.toFixed(2)}, ${irisN.y.toFixed(2)})  px=(${x|0},${y|0})  hasCalib=${hasCalib}`;
+      pctx.clearRect(0,0,preview.width,preview.height);
+      pctx.drawImage(rawVideo,0,0,preview.width,preview.height);
+      const dot=(u,v,c='#0f0',r=3)=>{pctx.fillStyle=c;pctx.beginPath();pctx.arc(u*preview.width,v*preview.height,r,0,7);pctx.fill();};
+      [468,469,470,471,473,474,475,476].forEach(i=>dot(lm[i].x,lm[i].y,'#0f0',2.5));
+    }
 
-    if(mode!=='face'){
-      cursor.style.display='block';
-      cursor.style.left=x+'px'; cursor.style.top=y+'px';
-      cursor.style.width=(brush*2)+'px'; cursor.style.height=(brush*2)+'px';
-    } else { cursor.style.display='none'; }
+    if(mode!=='face'){
+      cursor.style.display='block';
+      cursor.style.left=x+'px'; cursor.style.top=y+'px';
+      cursor.style.width=(brush*2)+'px'; cursor.style.height=(brush*2)+'px';
+    } else { cursor.style.display='none'; }
 
-    if(mode==='brush' && isPainting){
-      if(last){
-        ctx.strokeStyle='rgba(0,200,255,.95)'; ctx.lineWidth=brush; ctx.lineJoin='round'; ctx.lineCap='round';
-        const mx=(last.x+x)/2, my=(last.y+y)/2;
-        ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.quadraticCurveTo(mx,my,x,y); ctx.stroke();
-        pts.push({t:Date.now(), x, y, mar:marEma});
-        countEl.textContent = `pts: ${pts.length}`;
-      }
-      last = {x,y};
-    }else{
-      last = {x,y};
-    }
-  });
+    if(mode==='brush' && isPainting){
+      if(last){
+        ctx.strokeStyle='rgba(0,200,255,.95)'; ctx.lineWidth=brush; ctx.lineJoin='round'; ctx.lineCap='round';
+        const mx=(last.x+x)/2, my=(last.y+y)/2;
+        ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.quadraticCurveTo(mx,my,x,y); ctx.stroke();
+        pts.push({t:Date.now(), x, y, mar:marEma});
+        countEl.textContent = `pts: ${pts.length}`;
+      }
+      last = {x,y};
+    }else{
+      last = {x,y};
+    }
+  });
 
-  // ---------- cargar calibración ----------
-  (function loadCalib(){
-    const saved = loadJson(LS_KEY);
-    if(saved && saved.A && saved.b){
-      A=saved.A; b=saved.b; hasCalib=true;
-    }else{
-      hasCalib=false; setDefaultAffineFromROI();
-    }
-  })();
+  // ---------- cargar calibración ----------
+  (function loadCalib(){
+    const saved = loadJson(LS_KEY);
+    if(saved && saved.A && saved.b){
+      A=saved.A; b=saved.b; hasCalib=true;
+    }else{
+      hasCalib=false; setDefaultAffineFromROI();
+    }
+  })();
 
-  // ---------- loop de boca (pintar/no pintar) ----------
-  function loop(){
-    if(marEma!=null){
-      const openThr  = mouthThr + CFG.mouthHys;
-      const closeThr = mouthThr - CFG.mouthHys;
-      isPainting = isPainting ? (marEma > closeThr) : (marEma > openThr);
-    }
-    requestAnimationFrame(loop);
-  }
-  requestAnimationFrame(loop);
-  requestAnimationFrame(faceLoop);
+  // ---------- loop de boca (pintar/no pintar) ----------
+  function loop(){
+    if(marEma!=null){
+      const openThr  = mouthThr + CFG.mouthHys;
+      const closeThr = mouthThr - CFG.mouthHys;
+      isPainting = isPainting ? (marEma > closeThr) : (marEma > openThr);
+    }
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+  requestAnimationFrame(faceLoop);
 
-  // ---------- ROI + Calibración ----------
-  function defineRoiWithMouse(){
-    alert('Arrastra con el mouse para dibujar el ROI donde colocaré los puntos de calibración.');
-    const r=stageEl.getBoundingClientRect();
-    let start=null, rectEl=null;
-    function onDown(e){
-      start={x:e.clientX - r.left, y:e.clientY - r.top};
-      if(!rectEl){ rectEl=document.createElement('div'); rectEl.className='roi-rect'; roiOverlay.appendChild(rectEl); }
-      placeRect(start.x,start.y,1,1);
-      window.addEventListener('mousemove',onMove);
-      window.addEventListener('mouseup',onUp,{once:true});
-    }
-    function onMove(e){
-      const x=e.clientX - r.left, y=e.clientY - r.top;
-      const x0=Math.min(start.x,x), y0=Math.min(start.y,y);
-      const x1=Math.max(start.x,x), y1=Math.max(start.y,y);
-      placeRect(x0,y0, x1-x0, y1-y0);
-    }
-    function onUp(){
-      window.removeEventListener('mousemove',onMove);
-      const bb=roiOverlay.lastChild.getBoundingClientRect();
-      const x0=(bb.left - r.left)/r.width, y0=(bb.top - r.top)/r.height;
-      const x1=(bb.right - r.left)/r.width, y1=(bb.bottom - r.top)/r.height;
-      roiNorm = {x0:clamp01(x0), y0:clamp01(y0), x1:clamp01(x1), y1:clamp01(y1)};
-      saveJson(ROI_KEY, roiNorm); drawRoiRect();
-      if(!hasCalib) setDefaultAffineFromROI();   // ← actualizar afín por defecto al cambiar ROI
-      alert('ROI guardada. Ejecuta la calibración guiada si quieres afinar más.');
-    }
-    stageEl.addEventListener('mousedown',onDown,{once:true});
-    function placeRect(x,y,w,h){ const el=roiOverlay.lastChild; el.style.left=x+'px'; el.style.top=y+'px'; el.style.width=w+'px'; el.style.height=h+'px'; }
-  }
-  function drawRoiRect(){
-    roiOverlay.innerHTML='';
-    const r=stageEl.getBoundingClientRect();
-    const x0=roiNorm.x0*r.width, y0=roiNorm.y0*r.height;
-    const w =(roiNorm.x1-roiNorm.x0)*r.width;
-    const h =(roiNorm.y1-roiNorm.y0)*r.height;
-    const rectEl=document.createElement('div');
-    rectEl.className='roi-rect';
-    rectEl.style.left=x0+'px'; rectEl.style.top=y0+'px';
-    rectEl.style.width=w+'px'; rectEl.style.height=h+'px';
-    roiOverlay.appendChild(rectEl);
-  }
+  // ---------- ROI + Calibración ----------
+  function defineRoiWithMouse(){
+    alert('Arrastra con el mouse para dibujar el ROI donde colocaré los puntos de calibración.');
+    const r=stageEl.getBoundingClientRect();
+    let start=null, rectEl=null;
+    function onDown(e){
+      start={x:e.clientX - r.left, y:e.clientY - r.top};
+      if(!rectEl){ rectEl=document.createElement('div'); rectEl.className='roi-rect'; roiOverlay.appendChild(rectEl); }
+      placeRect(start.x,start.y,1,1);
+      window.addEventListener('mousemove',onMove);
+      window.addEventListener('mouseup',onUp,{once:true});
+    }
+    function onMove(e){
+      const x=e.clientX - r.left, y=e.clientY - r.top;
+      const x0=Math.min(start.x,x), y0=Math.min(start.y,y);
+      const x1=Math.max(start.x,x), y1=Math.max(start.y,y);
+      placeRect(x0,y0, x1-x0, y1-y0);
+    }
+    function onUp(){
+      window.removeEventListener('mousemove',onMove);
+      const bb=roiOverlay.lastChild.getBoundingClientRect();
+      const x0=(bb.left - r.left)/r.width, y0=(bb.top - r.top)/r.height;
+      const x1=(bb.right - r.left)/r.width, y1=(bb.bottom - r.top)/r.height;
+      roiNorm = {x0:clamp01(x0), y0:clamp01(y0), x1:clamp01(x1), y1:clamp01(y1)};
+      saveJson(ROI_KEY, roiNorm); drawRoiRect();
+      if(!hasCalib) setDefaultAffineFromROI();
+      alert('ROI guardada. Ejecuta la calibración guiada si quieres afinar más.');
+    }
+    stageEl.addEventListener('mousedown',onDown,{once:true});
+    function placeRect(x,y,w,h){ const el=roiOverlay.lastChild; el.style.left=x+'px'; el.style.top=y+'px'; el.style.width=w+'px'; el.style.height=h+'px'; }
+  }
+  function drawRoiRect(){
+    roiOverlay.innerHTML='';
+    const r=stageEl.getBoundingClientRect();
+    const x0=roiNorm.x0*r.width, y0=roiNorm.y0*r.height;
+    const w =(roiNorm.x1-roiNorm.x0)*r.width;
+    const h =(roiNorm.y1-roiNorm.y0)*r.height;
+    const rectEl=document.createElement('div');
+    rectEl.className='roi-rect';
+    rectEl.style.left=x0+'px'; rectEl.style.top=y0+'px';
+    rectEl.style.width=w+'px'; rectEl.style.height=h+'px';
+    roiOverlay.appendChild(rectEl);
+  }
 
-  async function guidedRoiCalibration(){
-    const r=stageEl.getBoundingClientRect();
-    const rx0=roiNorm.x0*r.width, ry0=roiNorm.y0*r.height;
-    const rw =(roiNorm.x1-roiNorm.x0)*r.width;
-    const rh =(roiNorm.y1-roiNorm.y0)*r.height;
+  async function guidedRoiCalibration(){
+    const r=stageEl.getBoundingClientRect();
+    const rx0=roiNorm.x0*r.width, ry0=roiNorm.y0*r.height;
+    const rw =(roiNorm.x1-roiNorm.x0)*r.width;
+    const rh =(roiNorm.y1-roiNorm.y0)*r.height;
 
-    const nx=[0,0.5,1], ny=[0,0.5,1];
-    const targets=[]; for(const ix of nx) for(const iy of ny){ targets.push({ x: rx0 + ix*rw, y: ry0 + iy*rh }); }
+    const nx=[0,0.5,1], ny=[0,0.5,1];
+    const targets=[]; for(const ix of nx) for(const iy of ny){ targets.push({ x: rx0 + ix*rw, y: ry0 + iy*rh }); }
 
-    roiOverlay.innerHTML=''; drawRoiRect();
-    const els=[];
-    for(const t of targets){
-      const el=document.createElement('div'); el.className='calib-target wait';
-      el.style.left=t.x+'px'; el.style.top=t.y+'px';
-      roiOverlay.appendChild(el); els.push(el);
-    }
+    roiOverlay.innerHTML=''; drawRoiRect();
+    const els=[];
+    for(const t of targets){
+      const el=document.createElement('div'); el.className='calib-target wait';
+      el.style.left=t.x+'px'; el.style.top=t.y+'px';
+      roiOverlay.appendChild(el); els.push(el);
+    }
 
-    alert('Calibración: clic en cada punto y MIRA ese punto ~1.2s. (Se aprende A,b: irisN→píxeles)');
-    const src=[], dst=[];
-    for(let i=0;i<targets.length;i++){
-      const el=els[i]; const t=targets[i];
-      await new Promise(res=>{
-        const onceClick = async ()=>{
-          el.classList.remove('wait'); el.classList.add('calib-target');
-          const samples=[]; const t0=performance.now();
-          function step(){
-            const now=performance.now();
-            if(irisN.x!=null && irisN.y!=null){ samples.push([irisN.x, irisN.y]); }
-            if(now-t0<1200){ requestAnimationFrame(step); }
-            else{
-              const m=mean2(samples);
-              if(!isNaN(m[0])){ src.push(m); dst.push([t.x, t.y]); }
-              el.classList.add('done'); res();
-            }
-          }
-          requestAnimationFrame(step);
-        };
-        el.addEventListener('click', onceClick, {once:true});
-      });
-      await sleep(120);
-    }
-    const sol=lsqAffine(src, dst);
-    if(sol){ A=sol.A; b=sol.b; hasCalib=true; saveJson(LS_KEY,{A,b}); alert('✅ Calibración guardada.'); }
-    else{ alert('No se pudo calibrar (muestras insuficientes).'); }
-  }
+    alert('Calibración: clic en cada punto y MIRA ese punto ~1.2s. (Se aprende A,b: irisN→píxeles)');
+    const src=[], dst=[];
+    for(let i=0;i<targets.length;i++){
+      const el=els[i]; const t=targets[i];
+      await new Promise(res=>{
+        const onceClick = async ()=>{
+          el.classList.remove('wait'); el.classList.add('calib-target');
+          const samples=[]; const t0=performance.now();
+          function step(){
+            const now=performance.now();
+            if(irisN.x!=null && irisN.y!=null){ samples.push([irisN.x, irisN.y]); }
+            if(now-t0<1200){ requestAnimationFrame(step); }
+            else{
+              const m=mean2(samples);
+              if(!isNaN(m[0])){ src.push(m); dst.push([t.x, t.y]); }
+              el.classList.add('done'); res();
+            }
+          }
+          requestAnimationFrame(step);
+        };
+        el.addEventListener('click', onceClick, {once:true});
+      });
+      await sleep(120);
+    }
+    const sol=lsqAffine(src, dst);
+    if(sol){ A=sol.A; b=sol.b; hasCalib=true; saveJson(LS_KEY,{A,b}); alert('✅ Calibración guardada.'); }
+    else{ alert('No se pudo calibrar (muestras insuficientes).'); }
+  }
 
-  // ---------- utils ----------
-  function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
-  function mean2(a){if(!a.length)return[NaN,NaN];const sx=a.reduce((s,v)=>s+v[0],0), sy=a.reduce((s,v)=>s+v[1],0);return[sx/a.length, sy/a.length];}
-  function median(arr){ if(!arr.length) return NaN; const a=[...arr].sort((x,y)=>x-y), m=Math.floor(a.length/2); return a.length%2 ? a[m] : (a[m-1]+a[m])/2; }
-  function clamp01(v){return Math.max(0,Math.min(1,v));}
-  function transpose(A){const m=A.length,n=A[0].length,AT=Array.from({length:n},()=>Array(m).fill(0));for(let i=0;i<m;i++)for(let j=0;j<n;j++)AT[j][i]=A[i][j];return AT;}
-  function mul(A,B){const m=A.length,n=A[0].length,p=B[0].length,C=Array.from({length:m},()=>Array(p).fill(0));for(let i=0;i<m;i++)for(let k=0;k<n;k++)for(let j=0;j<p;j++)C[i][j]+=A[i][k]*B[k][j];return C;}
-  function mulVec(A,v){const m=A.length,n=A[0].length,r=Array(m).fill(0);for(let i=0;i<m;i++)for(let j=0;j<n;j++)r[i]+=A[i][j]*v[j];return r;}
-  function solveGaussian(A,b){const n=A.length,M=A.map((row,i)=>row.concat([b[i]]));for(let i=0;i<n;i++){let max=i;for(let r=i+1;r<n;r++)if(Math.abs(M[r][i])>Math.abs(M[max][i]))max=r;if(Math.abs(M[max][i])<1e-9)return null;[M[i],M[max]]=[M[max],M[i]];const piv=M[i][i];for(let k=i;k<=n;k++)M[i][k]/=piv;for(let r=0;r<n;r++)if(r!==i){const f=M[r][i];for(let k=i;k<=n;k++)M[r][k]-=f*M[i][k];}}return M.map(row=>row[n]);}
-  function lsqAffine(srcPts,dstPts){
-    if(!srcPts.length || srcPts.length<3) return null;
-    const M=[],Z=[];
-    for(let i=0;i<srcPts.length;i++){
-      const[gx,gy]=srcPts[i]; const[tx,ty]=dstPts[i];
-      M.push([gx,gy,0,0,1,0]); Z.push(tx);
-      M.push([0,0,gx,gy,0,1]); Z.push(ty);
-    }
-    const Mt=transpose(M),MtM=mul(Mt,M),MtZ=mulVec(Mt,Z),p=solveGaussian(MtM,MtZ);
-    return p?{A:[p[0],p[1],p[2],p[3]],b:[p[4],p[5]]}:null;
-  }
-  function saveJson(k,v){ try{ if(v==null){localStorage.removeItem(k);} else {localStorage.setItem(k, JSON.stringify(v));} }catch(e){} }
-  function loadJson(k){ try{ const s=localStorage.getItem(k); return s?JSON.parse(s):null; }catch(e){ return null; } }
+  // ---------- utils ----------
+  function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
+  function mean2(a){if(!a.length)return[NaN,NaN];const sx=a.reduce((s,v)=>s+v[0],0), sy=a.reduce((s,v)=>s+v[1],0);return[sx/a.length, sy/a.length];}
+  function median(arr){ if(!arr.length) return NaN; const a=[...arr].sort((x,y)=>x-y), m=Math.floor(a.length/2); return a.length%2 ? a[m] : (a[m-1]+a[m])/2; }
+  function clamp01(v){return Math.max(0,Math.min(1,v));}
+  function transpose(A){const m=A.length,n=A[0].length,AT=Array.from({length:n},()=>Array(m).fill(0));for(let i=0;i<m;i++)for(let j=0;j<n;j++)AT[j][i]=A[i][j];return AT;}
+  function mul(A,B){const m=A.length,n=A[0].length,p=B[0].length,C=Array.from({length:m},()=>Array(p).fill(0));for(let i=0;i<m;i++)for(let k=0;k<n;k++)for(let j=0;j<p;j++)C[i][j]+=A[i][k]*B[k][j];return C;}
+  function mulVec(A,v){const m=A.length,n=A[0].length,r=Array(m).fill(0);for(let i=0;i<m;i++)for(let j=0;j<n;j++)r[i]+=A[i][j]*v[j];return r;}
+  function solveGaussian(A,b){const n=A.length,M=A.map((row,i)=>row.concat([b[i]]));for(let i=0;i<n;i++){let max=i;for(let r=i+1;r<n;r++)if(Math.abs(M[r][i])>Math.abs(M[max][i]))max=r;if(Math.abs(M[max][i])<1e-9)return null;[M[i],M[max]]=[M[max],M[i]];const piv=M[i][i];for(let k=i;k<=n;k++)M[i][k]/=piv;for(let r=0;r<n;r++)if(r!==i){const f=M[r][i];for(let k=i;k<=n;k++)M[r][k]-=f*M[i][k];}}return M.map(row=>row[n]);}
+  function lsqAffine(srcPts,dstPts){
+    if(!srcPts.length || srcPts.length<3) return null;
+    const M=[],Z=[];
+    for(let i=0;i<srcPts.length;i++){
+      const[gx,gy]=srcPts[i]; const[tx,ty]=dstPts[i];
+      M.push([gx,gy,0,0,1,0]); Z.push(tx);
+      M.push([0,0,gx,gy,0,1]); Z.push(ty);
+    }
+    const Mt=transpose(M),MtM=mul(Mt,M),MtZ=mulVec(Mt,Z),p=solveGaussian(MtM,MtZ);
+    return p?{A:[p[0],p[1],p[2],p[3]],b:[p[4],p[5]]}:null;
+  }
+  function saveJson(k,v){ try{ if(v==null){localStorage.removeItem(k);} else {localStorage.setItem(k, JSON.stringify(v));} }catch(e){} }
+  function loadJson(k){ try{ const s=localStorage.getItem(k); return s?JSON.parse(s):null; }catch(e){ return null; } }
 
 })();
 </script>
