@@ -191,27 +191,49 @@
     isPainting = isPainting ? (marEma > closeThr) : (marEma > openThr);
   }
 
-  // --- Lógica de la Mirada (Iris) ---
   function processGaze(landmarks) {
-    const avg = (idxs) => idxs.reduce((s,i)=>({x:s.x+landmarks[i].x, y:s.y+landmarks[i].y}), {x:0,y:0});
-    const rC = avg([468,469,470,471]); rC.x/=4; rC.y/=4;
-    const lC = avg([473,474,475,476]); lC.x/=4; lC.y/=4;
+    const avg = (idxs) => idxs.reduce((s, i) => ({ x: s.x + landmarks[i].x, y: s.y + landmarks[i].y }), { x: 0, y: 0 });
+    const rC = avg([468, 469, 470, 471]); rC.x /= 4; rC.y /= 4;
+    const lC = avg([473, 474, 475, 476]); lC.x /= 4; lC.y /= 4;
+
     const R_L = landmarks[133], R_R = landmarks[33];
-    const R_T = landmarks[159], R_B = landmarks[145];
     const L_L = landmarks[362], L_R = landmarks[263];
-    const L_T = landmarks[386], L_B = landmarks[374];
+
     const rW = Math.abs(R_R.x - R_L.x), lW = Math.abs(L_R.x - L_L.x);
+    
+    let irisX_norm;
+    let irisY_norm;
+
+    // Ajuste de la normalización X
+    if (rW > 0 && lW > 0) {
+        let rx_norm = (rC.x - R_L.x) / rW;
+        let lx_norm = (lC.x - L_L.x) / lW;
+        irisX_norm = (rx_norm + lx_norm) / 2;
+    } else {
+        irisX_norm = 0.5; // Valor por defecto
+    }
+
+    // Ajuste de la normalización Y
+    const R_T = landmarks[159], R_B = landmarks[145];
+    const L_T = landmarks[386], L_B = landmarks[374];
     const rH = Math.abs(R_B.y - R_T.y), lH = Math.abs(L_B.y - L_T.y);
-    const rx = (rC.x - R_L.x) / rW, lx = (lC.x - L_L.x) / lW;
-    const ry = (rC.y - R_T.y) / rH, ly = (lC.y - L_T.y) / lH;
-    let gxN = (rx + lx) / 2;
-    let gyN = (ry + ly) / 2;
-    if (CFG.invertY) gyN = 1 - gyN;
-    gxN = Math.max(0, Math.min(1, 0.5 + (gxN - 0.5) * CFG.gainX));
-    gyN = Math.max(0, Math.min(1, 0.5 + (gyN - 0.5) * CFG.gainY));
-    irisN.x = gxN;
-    irisN.y = gyN;
-  }
+
+    if (rH > 0 && lH > 0) {
+        let ry_norm = (rC.y - R_T.y) / rH;
+        let ly_norm = (lC.y - L_T.y) / lH;
+        irisY_norm = (ry_norm + ly_norm) / 2;
+    } else {
+        irisY_norm = 0.5; // Valor por defecto
+    }
+    
+    // Aplicar ajustes y ganancias
+    irisX_norm = Math.max(0, Math.min(1, 0.5 + (irisX_norm - 0.5) * CFG.gainX));
+    if (CFG.invertY) irisY_norm = 1 - irisY_norm;
+    irisY_norm = Math.max(0, Math.min(1, 0.5 + (irisY_norm - 0.5) * CFG.gainY));
+
+    irisN.x = irisX_norm;
+    irisN.y = irisY_norm;
+}
 
   // --- Detección de Rostros y Bucle Principal ---
   const faceMesh = new FaceMesh({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
